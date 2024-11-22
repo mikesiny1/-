@@ -1,0 +1,147 @@
+<html lang="he">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>רשימת קניות</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css"></link>
+    <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Varela Round', sans-serif;
+        }
+        ul {
+            list-style-type: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+    <div class="container mx-auto p-4">
+        <h1 class="text-4xl font-bold mb-6 text-center text-green-600">רשימת קניות למשק בית</h1>
+        <div class="bg-white p-6 rounded-lg shadow-lg">
+            <h2 class="text-3xl font-semibold mb-4 text-green-500">פירות וירקות</h2>
+            <ul id="fruits-vegetables" class="pl-5 mb-6">
+                <li><input type="checkbox" class="mr-2">תפוחים</li>
+                <li><input type="checkbox" class="mr-2">בננות</li>
+                <li><input type="checkbox" class="mr-2">עגבניות</li>
+                <li><input type="checkbox" class="mr-2">מלפפונים</li>
+                <li><input type="checkbox" class="mr-2">גזר</li>
+                <li><input type="checkbox" class="mr-2">תפוחי אדמה</li>
+                <li><input type="checkbox" class="mr-2">בצל</li>
+                <li><input type="checkbox" class="mr-2">שום</li>
+                <li><input type="checkbox" class="mr-2">פלפלים</li>
+                <li><input type="checkbox" class="mr-2">חסה</li>
+            </ul>
+            <h2 class="text-3xl font-semibold mb-4 text-green-500">מוצרי חלב</h2>
+            <ul id="dairy-products" class="pl-5 mb-6">
+                <li><input type="checkbox" class="mr-2">חלב</li>
+                <li><input type="checkbox" class="mr-2">גבינה לבנה</li>
+                <li><input type="checkbox" class="mr-2">יוגורט</li>
+                <li><input type="checkbox" class="mr-2">חמאה</li>
+                <li><input type="checkbox" class="mr-2">קוטג'</li>
+                <li><input type="checkbox" class="mr-2">גבינת צהובה</li>
+                <li><input type="checkbox" class="mr-2">שמנת מתוקה</li>
+                <li><input type="checkbox" class="mr-2">גבינת שמנת</li>
+            </ul>
+            <h2 class="text-3xl font-semibold mb-4 text-green-500">מוצרי מאפה</h2>
+            <ul id="bakery-products" class="pl-5 mb-6">
+                <li><input type="checkbox" class="mr-2">לחם</li>
+                <li><input type="checkbox" class="mr-2">לחמניות</li>
+                <li><input type="checkbox" class="mr-2">פיתות</li>
+                <li><input type="checkbox" class="mr-2">בייגלה</li>
+                <li><input type="checkbox" class="mr-2">עוגיות</li>
+                <li><input type="checkbox" class="mr-2">קרואסונים</li>
+                <li><input type="checkbox" class="mr-2">עוגות</li>
+            </ul>
+            <h2 class="text-3xl font-semibold mb-4 text-green-500">מוצרי ניקיון</h2>
+            <ul id="cleaning-products" class="pl-5 mb-6">
+                <li><input type="checkbox" class="mr-2">סבון כלים</li>
+                <li><input type="checkbox" class="mr-2">אבקת כביסה</li>
+                <li><input type="checkbox" class="mr-2">מרכך כביסה</li>
+                <li><input type="checkbox" class="mr-2">מטליות ניקוי</li>
+                <li><input type="checkbox" class="mr-2">נייר טואלט</li>
+                <li><input type="checkbox" class="mr-2">נייר מגבת</li>
+                <li><input type="checkbox" class="mr-2">חומר ניקוי רצפות</li>
+                <li><input type="checkbox" class="mr-2">חומר ניקוי חלונות</li>
+            </ul>
+            <h2 class="text-3xl font-semibold mb-4 text-green-500">מוצרי מזון יבשים</h2>
+            <ul id="dry-foods" class="pl-5 mb-6">
+                <li><input type="checkbox" class="mr-2">אורז</li>
+                <li><input type="checkbox" class="mr-2">פסטה</li>
+                <li><input type="checkbox" class="mr-2">קמח</li>
+                <li><input type="checkbox" class="mr-2">סוכר</li>
+                <li><input type="checkbox" class="mr-2">שמן</li>
+                <li><input type="checkbox" class="mr-2">קטניות</li>
+                <li><input type="checkbox" class="mr-2">קוסקוס</li>
+                <li><input type="checkbox" class="mr-2">קוואקר</li>
+                <li><input type="checkbox" class="mr-2">תבלינים</li>
+            </ul>
+            <h2 class="text-3xl font-semibold mb-4 text-green-500">מצרכים חיוניים</h2>
+            <ul id="essential-items" class="pl-5 mb-6">
+                <li><input type="checkbox" class="mr-2">ביצים</li>
+                <li><input type="checkbox" class="mr-2">מים מינרליים</li>
+                <li><input type="checkbox" class="mr-2">קפה</li>
+                <li><input type="checkbox" class="mr-2">תה</li>
+                <li><input type="checkbox" class="mr-2">שוקולד</li>
+                <li><input type="checkbox" class="mr-2">ריבה</li>
+                <li><input type="checkbox" class="mr-2">דבש</li>
+                <li><input type="checkbox" class="mr-2">מלח</li>
+                <li><input type="checkbox" class="mr-2">פלפל</li>
+            </ul>
+            <div class="mb-6">
+                <h2 class="text-3xl font-semibold mb-4 text-green-500">הוסף מוצר חדש</h2>
+                <div class="flex mb-4">
+                    <input id="new-item" type="text" placeholder="הכנס שם מוצר" class="border border-gray-300 p-2 rounded-lg flex-grow mr-2">
+                    <select id="category" class="border border-gray-300 p-2 rounded-lg mr-2">
+                        <option value="fruits-vegetables">פירות וירקות</option>
+                        <option value="dairy-products">מוצרי חלב</option>
+                        <option value="bakery-products">מוצרי מאפה</option>
+                        <option value="cleaning-products">מוצרי ניקיון</option>
+                        <option value="dry-foods">מוצרי מזון יבשים</option>
+                        <option value="essential-items">מצרכים חיוניים</option>
+                    </select>
+                    <button id="add-item" class="bg-green-500 text-white px-4 py-2 rounded-lg shadow-md hover:bg-green-600 transition duration-300">הוסף</button>
+                </div>
+            </div>
+            <button id="sendWhatsapp" class="bg-green-500 text-white px-6 py-3 rounded-lg shadow-md hover:bg-green-600 transition duration-300 w-full text-xl">
+                <i class="fab fa-whatsapp"></i> שלח בוואטסאפ
+            </button>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('add-item').addEventListener('click', function() {
+            const newItem = document.getElementById('new-item').value;
+            const category = document.getElementById('category').value;
+            if (newItem.trim() !== '') {
+                const ul = document.getElementById(category);
+                const li = document.createElement('li');
+                li.innerHTML = `<input type="checkbox" class="mr-2">${newItem}`;
+                ul.appendChild(li);
+                document.getElementById('new-item').value = '';
+            }
+        });
+
+        document.getElementById('sendWhatsapp').addEventListener('click', function() {
+            const categories = ['fruits-vegetables', 'dairy-products', 'bakery-products', 'cleaning-products', 'dry-foods', 'essential-items'];
+            const categoryNames = {
+                'fruits-vegetables': 'פירות וירקות',
+                'dairy-products': 'מוצרי חלב',
+                'bakery-products': 'מוצרי מאפה',
+                'cleaning-products': 'מוצרי ניקיון',
+                'dry-foods': 'מוצרי מזון יבשים',
+                'essential-items': 'מצרכים חיוניים'
+            };
+            const items = categories.map(category => {
+                const ul = document.getElementById(category);
+                const lis = ul.getElementsByTagName('li');
+                const checkedItems = Array.from(lis).filter(li => li.querySelector('input').checked).map(li => li.textContent.trim()).sort();
+                return checkedItems.length > 0 ? `${categoryNames[category]}:\n${checkedItems.join('\n')}` : '';
+            }).filter(item => item !== '');
+            const message = items.join('\n\n');
+            const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+            window.open(whatsappUrl, '_blank');
+        });
+    </script>
+</body>
+</html>
