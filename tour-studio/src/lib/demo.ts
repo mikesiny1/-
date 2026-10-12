@@ -1,5 +1,5 @@
 /** Draws an architect-style sample plan (5 rooms, ~105 m²) so the studio can be tried without files. */
-export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' | 'glass' = 'solid'): HTMLCanvasElement {
+export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' | 'glass' | 'thin' = 'solid'): HTMLCanvasElement {
   const S = 60; // px per metre
   const M = 1.4; // margin in metres
   const c = document.createElement('canvas');
@@ -19,7 +19,12 @@ export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' | 'glass' = '
       y0 === y1
         ? [X(Math.min(x0, x1) - h), Y(y0 - h), (Math.abs(x1 - x0) + t) * S, t * S]
         : [X(x0 - h), Y(Math.min(y0, y1) - h), t * S, (Math.abs(y1 - y0) + t) * S];
-    if (variant === 'outline') {
+    if (variant === 'thin' && t < 0.2) {
+      // sales-plan style: interior partitions as a single thin line
+      g.fillStyle = '#3a3a3a';
+      if (y0 === y1) g.fillRect(r[0], Y(y0) - 1.5, r[2], 3);
+      else g.fillRect(X(x0) - 1.5, r[1], 3, r[3]);
+    } else if (variant === 'outline') {
       g.strokeStyle = '#1b1b1b';
       g.lineWidth = 2;
       g.strokeRect(r[0] + 1, r[1] + 1, r[2] - 2, r[3] - 2);
@@ -115,7 +120,7 @@ export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' | 'glass' = '
   glazeH(9, 0.6, 5.4);
   glazeH(9, 9.6, 11.2);
 
-  if (variant === 'glass') {
+  if (variant === 'glass' || variant === 'thin') {
     // developer-plan look: the living room facades are full-height glazing drawn in thin grey
     g.fillStyle = '#fbfbf8';
     g.fillRect(X(-0.2), Y(4.2), 0.4 * S, 4.9 * S); // left facade of the living room

@@ -111,14 +111,14 @@ function erode(src: Uint8Array, w: number, h: number, r: number) {
 function floodFrom(passable: Uint8Array, w: number, h: number, seeds: number[]): Uint8Array {
   const seen = new Uint8Array(w * h);
   const stack: number[] = [];
-  for (const s of seeds) if (passable[s] && !seen[s]) (seen[s] = 1), stack.push(s);
+  for (const s of seeds) if (passable[s] && !seen[s]) ((seen[s] = 1), stack.push(s));
   while (stack.length) {
     const i = stack.pop()!;
     const x = i % w;
-    if (x > 0 && passable[i - 1] && !seen[i - 1]) (seen[i - 1] = 1), stack.push(i - 1);
-    if (x < w - 1 && passable[i + 1] && !seen[i + 1]) (seen[i + 1] = 1), stack.push(i + 1);
-    if (i >= w && passable[i - w] && !seen[i - w]) (seen[i - w] = 1), stack.push(i - w);
-    if (i < w * (h - 1) && passable[i + w] && !seen[i + w]) (seen[i + w] = 1), stack.push(i + w);
+    if (x > 0 && passable[i - 1] && !seen[i - 1]) ((seen[i - 1] = 1), stack.push(i - 1));
+    if (x < w - 1 && passable[i + 1] && !seen[i + 1]) ((seen[i + 1] = 1), stack.push(i + 1));
+    if (i >= w && passable[i - w] && !seen[i - w]) ((seen[i - w] = 1), stack.push(i - w));
+    if (i < w * (h - 1) && passable[i + w] && !seen[i + w]) ((seen[i + w] = 1), stack.push(i + w));
   }
   return seen;
 }
@@ -146,7 +146,7 @@ function components(mask: Uint8Array, w: number, h: number) {
       if (y < b.y0) b.y0 = y;
       if (y > b.y1) b.y1 = y;
       const nb = [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1];
-      for (const n of nb) if (n >= 0 && mask[n] && !labels[n]) (labels[n] = l), stack.push(n);
+      for (const n of nb) if (n >= 0 && mask[n] && !labels[n]) ((labels[n] = l), stack.push(n));
     }
     sizes.push(size);
     boxes.push(b);
@@ -173,7 +173,7 @@ function otsu(gray: Uint8Array): number {
     const mB = sumB / wB;
     const mF = (sum - sumB) / wF;
     const between = wB * wF * (mB - mF) * (mB - mF);
-    if (between > best) (best = between), (t = i);
+    if (between > best) ((best = between), (t = i));
   }
   return t;
 }
@@ -237,8 +237,9 @@ export function extractWalls(r: Raster, threshold: number, minWall: number, fill
   const keep = sizes.map((s, l) => {
     if (l === 0) return 0;
     const b = boxes[l];
-    const span = Math.max(b.x1 - b.x0, b.y1 - b.y0);
-    return s > 30 && span > minSpan ? 1 : 0;
+    const span = Math.max(b.x1 - b.x0, b.y1 - b.y0) + 1;
+    if (s <= 30 || span <= minSpan) return 0;
+    return 1;
   });
   for (let i = 0; i < opened.length; i++) opened[i] = labels[i] ? keep[labels[i]] : 0;
   return opened;
@@ -258,8 +259,7 @@ function orthoHull(wall: Uint8Array, w: number, h: number) {
         if (y < colMin[x]) colMin[x] = y;
         if (y > colMax[x]) colMax[x] = y;
       }
-  for (let y = 0; y < h; y++)
-    for (let x = rowMin[y]; x <= rowMax[y]; x++) if (y >= colMin[x] && y <= colMax[x]) hull[y * w + x] = 1;
+  for (let y = 0; y < h; y++) for (let x = rowMin[y]; x <= rowMax[y]; x++) if (y >= colMin[x] && y <= colMax[x]) hull[y * w + x] = 1;
   return hull;
 }
 
@@ -330,12 +330,28 @@ function separators(r: Raster, threshold: number) {
   return ink;
 }
 
+/** Walls plus thin facade lines (glazing drawn in light grey) close to the building. */
+function withFacade(r: Raster, wall: Uint8Array, m: number) {
+  const { w, h } = r;
+  const facadeInk = separators(r, 228);
+  const wb = bboxOf(wall, w, h);
+  const seal = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const inBox = x >= wb.x0 - m && x <= wb.x1 + m && y >= wb.y0 - m && y <= wb.y1 + m;
+      seal[i] = wall[i] || (facadeInk[i] && inBox) ? 1 : 0;
+    }
+  return seal;
+}
+
 /** Estimate pixels-per-metre from the declared floor area. */
 export function estimateScale(r: Raster, wall: Uint8Array, sqm: number) {
   // Without a scale yet, bridge gaps up to ~1/6 of the plan's size (≈2m windows on a typical flat).
   const wb = bboxOf(wall, r.w, r.h);
-  const bridge = Math.round(Math.max(wb.x1 - wb.x0, wb.y1 - wb.y0) * 0.085);
-  const { interior, area } = interiorOf(wall, r.w, r.h, bridge);
+  const span = Math.max(wb.x1 - wb.x0, wb.y1 - wb.y0);
+  const bridge = Math.round(span * 0.085);
+  const { interior, area } = interiorOf(withFacade(r, wall, Math.round(span * 0.012)), r.w, r.h, bridge);
   if (!area) return 50;
   if (sqm > 10) return Math.sqrt(area / (sqm * 1.1));
   const b = bboxOf(interior, r.w, r.h);
@@ -373,26 +389,22 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
   const { w, h } = r;
   const pxPerM = s.pxPerM;
   const wall = extractWalls(r, s.threshold, s.minWall, s.fillOutline ? Math.round(s.fillOutline * pxPerM) : 0);
+  if (!s.fillOutline) addPartitions(r, wall, Math.min(200, s.threshold + 40), pxPerM, glazingMask(r, wall, pxPerM, 2.2, true));
 
   // Interior: everything enclosed by the outer walls once window/door gaps up to ~2.6m are bridged.
   // Thin facade lines (glazing drawn in light grey) count too, but only close to the building, so
   // sheet frames, dimension lines and legends far from the walls can't enclose anything.
-  const facadeInk = separators(r, 228);
-  const wb = bboxOf(wall, w, h);
-  const m = Math.round(pxPerM * 0.15);
-  const seal = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      const inBox = x >= wb.x0 - m && x <= wb.x1 + m && y >= wb.y0 - m && y <= wb.y1 + m;
-      seal[i] = wall[i] || (facadeInk[i] && inBox) ? 1 : 0;
-    }
+  const seal = withFacade(r, wall, Math.round(pxPerM * 0.15));
   const interior = mainBody(interiorOf(seal, w, h, Math.round(pxPerM * 1.3)).interior, w, h, pxPerM);
 
   // Rooms: free space with doorways sealed. Thin lines (glazing, door leaves) also divide space.
   const doorR = Math.max(1, Math.round((s.doorGap * pxPerM) / 2));
   const sealed = dilate(wall, w, h, doorR);
   const sep = s.thinLines === false ? null : separators(r, Math.min(215, s.threshold + 60));
+  if (sep) {
+    const glass = glazingMask(r, wall, pxPerM);
+    for (let i = 0; i < sep.length; i++) sep[i] |= glass[i];
+  }
   const free = new Uint8Array(w * h);
   for (let i = 0; i < free.length; i++) free[i] = interior[i] && !sealed[i] && !(sep && sep[i]) ? 1 : 0;
   const comp = components(free, w, h);
@@ -431,9 +443,18 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
     frontier = next;
   }
 
-  // rooms the user outlined by hand win over automatic segmentation
+  // floor no room reached (a corridor narrower than a doorway is sealed whole) is a space of its own
   let nextLabel = 0;
   for (const l of labels) if (l > nextLabel) nextLabel = l;
+  {
+    const rest = new Uint8Array(w * h);
+    for (let i = 0; i < rest.length; i++) rest[i] = floor[i] && !labels[i] ? 1 : 0;
+    const rc = components(rest, w, h);
+    const ids = rc.sizes.map((sz) => (sz >= 1.5 * pxPerM * pxPerM ? ++nextLabel : 0));
+    for (let i = 0; i < rest.length; i++) if (rc.labels[i] && ids[rc.labels[i]]) labels[i] = ids[rc.labels[i]];
+  }
+
+  // rooms the user outlined by hand win over automatic segmentation
   for (const room of s.rooms) {
     const rc = room.rect;
     if (!rc) continue;
@@ -485,17 +506,19 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
         }
     const mr = maxRect(grid, gw, gh);
     const inner: Rect = mr
-      ? { x0: mr.x0 * cell, y0: mr.y0 * cell, x1: (mr.x1 + 1) * cell, y1: (mr.y1 + 1) * cell }
+      ? {
+          x0: mr.x0 * cell,
+          y0: mr.y0 * cell,
+          x1: (mr.x1 + 1) * cell,
+          y1: (mr.y1 + 1) * cell,
+        }
       : { ...bbox };
     const area = areaByLabel.get(l) || 0;
     const solid = sideSolidity(inner, wall, labels, l, w, h, Math.round(pxPerM * 0.35));
     const tk = regionWallThickness(labels, l, thickness, w, h);
     const ext = exteriorWall(labels, l, wall, interior, w, h);
     const touchesOutside =
-      bbox.x0 - hb.x0 < pxPerM * 0.6 ||
-      hb.x1 - bbox.x1 < pxPerM * 0.6 ||
-      bbox.y0 - hb.y0 < pxPerM * 0.6 ||
-      hb.y1 - bbox.y1 < pxPerM * 0.6;
+      bbox.x0 - hb.x0 < pxPerM * 0.6 || hb.x1 - bbox.x1 < pxPerM * 0.6 || bbox.y0 - hb.y0 < pxPerM * 0.6 || hb.y1 - bbox.y1 < pxPerM * 0.6;
     regions.set(l, {
       label: l,
       area,
@@ -514,9 +537,21 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
   const medianWall = allT.length ? allT[Math.floor(allT.length / 2)] : 0;
 
   const openings = detectOpenings(wall, interior, labels, sep || separators(r, Math.min(215, s.threshold + 60)), pxPerM, w, h);
-  openings.push(...facadeGlazing(wall, interior, labels, openings, facadeInk, pxPerM, w, h));
+  openings.push(...facadeGlazing(wall, interior, labels, openings, separators(r, 228), pxPerM, w, h));
 
-  return { w, h, scale: r.scale, wall, interior, labels, regions, hull: hb, pxPerM, medianWall, openings };
+  return {
+    w,
+    h,
+    scale: r.scale,
+    wall,
+    interior,
+    labels,
+    regions,
+    hull: hb,
+    pxPerM,
+    medianWall,
+    openings,
+  };
 }
 
 /**
@@ -527,7 +562,12 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
 function detectOpenings(wall: Uint8Array, interior: Uint8Array, labels: Int32Array, ink: Uint8Array, ppm: number, w: number, h: number): Opening[] {
   const cell = Math.max(1, Math.round(ppm * 0.05));
   const { grid, gw, gh } = downsample(wall, w, h, cell, 0.45);
-  const rects = mergeRects(grid, gw, gh).map((b) => ({ x0: b.x * cell, y0: b.y * cell, x1: (b.x + b.w) * cell, y1: (b.y + b.h) * cell }));
+  const rects = mergeRects(grid, gw, gh).map((b) => ({
+    x0: b.x * cell,
+    y0: b.y * cell,
+    x1: (b.x + b.w) * cell,
+    y1: (b.y + b.h) * cell,
+  }));
   const maxT = ppm * 0.5;
   const minGap = ppm * 0.55,
     maxGap = ppm * 5.5;
@@ -610,6 +650,293 @@ export function classifyOpening(o: Opening, isBalcony: (label: number) => boolea
     return o.widthM <= 1.4 ? 'entry' : 'window';
   }
   return o.widthM <= 1.25 ? 'door' : 'passage';
+}
+
+interface Seg {
+  axis: 'x' | 'y';
+  a0: number;
+  a1: number;
+  c0: number;
+  c1: number;
+}
+
+/** Straight axis-aligned strokes in an ink mask (each with its extent along and across). */
+function strokeSegments(ink: Uint8Array, w: number, h: number, minLen: number) {
+  const segs: Seg[] = [];
+  for (const axis of ['x', 'y'] as const) {
+    const A = axis === 'x' ? w : h,
+      C = axis === 'x' ? h : w;
+    const idx = (a: number, c: number) => (axis === 'x' ? c * w + a : a * w + c);
+    let open: Seg[] = [];
+    for (let c = 0; c < C; c++) {
+      const next: Seg[] = [];
+      let a = 0;
+      while (a < A) {
+        if (!ink[idx(a, c)]) {
+          a++;
+          continue;
+        }
+        const s0 = a;
+        while (a < A && ink[idx(a, c)]) a++;
+        if (a - s0 < minLen) continue;
+        const r0 = s0,
+          r1 = a - 1;
+        // the same stroke on the next row: (nearly) the same extent
+        const o = open.find((g) => Math.min(g.a1, r1) - Math.max(g.a0, r0) >= 0.85 * Math.max(g.a1 - g.a0, r1 - r0));
+        if (o) {
+          o.c1 = c;
+          o.a0 = Math.min(o.a0, r0);
+          o.a1 = Math.max(o.a1, r1);
+          next.push(o);
+        } else {
+          const g: Seg = { axis, a0: r0, a1: r1, c0: c, c1: c };
+          segs.push(g);
+          next.push(g);
+        }
+      }
+      open = next;
+    }
+  }
+  return segs;
+}
+
+/**
+ * Glazing drawn as a pair of thin parallel lines (window panes, glass facades), even in light grey.
+ * Returned as a mask covering both lines and the band between them: glass divides rooms.
+ */
+function glazingMask(r: Raster, wall: Uint8Array, ppm: number, minLenM = 0.8, facadeOnly = false) {
+  const { w, h, gray } = r;
+  const ink = new Uint8Array(w * h);
+  for (let i = 0; i < ink.length; i++) ink[i] = gray[i] < 228 && !wall[i] ? 1 : 0;
+  const maxT = Math.max(2, Math.round(ppm * 0.06));
+  const segs = strokeSegments(ink, w, h, Math.round(ppm * minLenM)).filter((g) => g.c1 - g.c0 + 1 <= maxT);
+  const twin = Math.round(ppm * 0.16);
+  const reach = Math.round(ppm * 0.3);
+  const meetsWall = (a: number, d: number, c0: number, c1: number, axis: 'x' | 'y') => {
+    for (let k = 0; k <= reach; k++)
+      for (let c = c0 - 2; c <= c1 + 2; c++) {
+        const x = axis === 'x' ? a + d * k : c,
+          y = axis === 'x' ? c : a + d * k;
+        if (x >= 0 && y >= 0 && x < w && y < h && wall[y * w + x]) return true;
+      }
+    return false;
+  };
+  const out = new Uint8Array(w * h);
+  for (const g of segs)
+    for (const o of segs) {
+      if (o === g || o.axis !== g.axis || o.c0 <= g.c1 + 1) continue;
+      if (o.c0 - g.c1 > twin) continue;
+      const a0 = Math.max(g.a0, o.a0),
+        a1 = Math.min(g.a1, o.a1);
+      if (a1 - a0 < 0.7 * Math.min(g.a1 - g.a0, o.a1 - o.a0)) continue;
+      // facade glazing runs into the structure at one end at least (furniture outlines float)
+      if (facadeOnly && !meetsWall(a0, -1, g.c0, o.c1, g.axis) && !meetsWall(a1, 1, g.c0, o.c1, g.axis)) continue;
+      for (let a = a0; a <= a1; a++) for (let c = g.c0; c <= o.c1; c++) out[g.axis === 'x' ? c * w + a : a * w + c] = 1;
+    }
+  return out;
+}
+
+/**
+ * Interior partitions drawn as a single thin line (sales plans often draw only the structure bold).
+ * A thin straight line is kept as a wall when both of its ends are held: by a wall, by another kept
+ * line (corners, T-junctions) or by a doorway (a door-sized gap, then a wall or a collinear line).
+ * What is left out: furniture (floats, or hugs a wall at cabinet depth, or boxes in a small pocket
+ * with no door), glazing (a double line, or a line that continues a wall on both ends) and text.
+ */
+function addPartitions(r: Raster, wall: Uint8Array, threshold: number, ppm: number, glass?: Uint8Array) {
+  const { w, h, gray } = r;
+  const ink = new Uint8Array(w * h);
+  for (let i = 0; i < ink.length; i++) ink[i] = gray[i] < threshold && !wall[i] ? 1 : 0;
+  const minLen = Math.max(6, Math.round(ppm * 0.2));
+  const maxT = Math.max(2, Math.round(ppm * 0.09));
+  const at = (x: number, y: number, m: Uint8Array) => x >= 0 && y >= 0 && x < w && y < h && m[y * w + x] === 1;
+  const segs = strokeSegments(ink, w, h, minLen);
+  const mid = (g: Seg) => Math.round((g.c0 + g.c1) / 2);
+  const pt = (g: Seg, a: number, c = mid(g)) => (g.axis === 'x' ? [a, c] : [c, a]);
+  const nearWall = (x: number, y: number, rad = 2) => {
+    for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) if (at(x + dx, y + dy, wall)) return true;
+    return false;
+  };
+  const endA = (g: Seg, end: 0 | 1) => (end ? g.a1 : g.a0);
+  const dir = (end: 0 | 1) => (end ? 1 : -1);
+  const reachGlass = Math.round(ppm * 0.25);
+  // what holds a line: a wall, or glazing (a balcony parapet meets the glass facade)
+  const touchesWall = (g: Seg, end: 0 | 1) => {
+    const [x, y] = pt(g, endA(g, end) + dir(end) * 2);
+    if (nearWall(x, y)) return true;
+    if (glass)
+      for (let k = 0; k <= reachGlass; k++) {
+        const [px, py] = pt(g, endA(g, end) + dir(end) * k);
+        if (at(px, py, glass)) return true;
+      }
+    return false;
+  };
+  // the wall continues the line's direction past its end → the line sits in a wall gap (a window)
+  const continuesWall = (g: Seg, end: 0 | 1) => {
+    const L = Math.round(ppm * 0.4);
+    let n = 0,
+      hit = 0;
+    for (let k = 3; k <= L; k++) {
+      const [x, y] = pt(g, endA(g, end) + dir(end) * k);
+      n++;
+      if (at(x, y, wall)) hit++;
+    }
+    return hit / n > 0.85;
+  };
+  // a line hugging a parallel wall at cabinet depth is a counter or wardrobe, not a partition
+  const hugsWall = (g: Seg) => {
+    const c = mid(g);
+    const d = Math.round(ppm * 0.75);
+    let hits = 0,
+      n = 0;
+    for (let a = g.a0; a <= g.a1; a += 3) {
+      n++;
+      let found = false;
+      for (const sgn of [-1, 1]) {
+        for (let k = 3; k <= d && !found; k += 2) {
+          const [x, y] = pt(g, a, c + sgn * k);
+          if (at(x, y, wall)) found = true;
+        }
+      }
+      if (found) hits++;
+    }
+    return n > 0 && hits / n > 0.7;
+  };
+  let cand = segs.filter((g) => g.c1 - g.c0 + 1 <= maxT && !hugsWall(g));
+  // glazing: a parallel twin a few centimetres away
+  const twin = Math.round(ppm * 0.16);
+  const glazing = new Set<Seg>();
+  for (const g of cand)
+    for (const o of cand) {
+      if (o === g || o.axis !== g.axis) continue;
+      const dc = Math.abs(mid(o) - mid(g));
+      const ov = Math.min(g.a1, o.a1) - Math.max(g.a0, o.a0);
+      const apart = o.c0 > g.c1 + 1 || g.c0 > o.c1 + 1;
+      if (apart && dc <= twin && ov > 0.7 * Math.min(g.a1 - g.a0, o.a1 - o.a0)) glazing.add(g);
+    }
+  cand = cand.filter((g) => !glazing.has(g) && !(continuesWall(g, 0) && continuesWall(g, 1)));
+
+  const touchesLine = (g: Seg, end: 0 | 1, pool: Set<Seg>) => {
+    const a = endA(g, end) + dir(end),
+      c = mid(g);
+    for (const o of pool) {
+      if (o === g) continue;
+      if (o.axis === g.axis) {
+        // collinear continuation
+        if (Math.abs(mid(o) - c) <= 3 && (end ? Math.abs(o.a0 - g.a1) <= 4 : Math.abs(g.a0 - o.a1) <= 4)) return o;
+      } else if (a >= o.c0 - 4 && a <= o.c1 + 4 && c >= o.a0 - 4 && c <= o.a1 + 4) return o;
+    }
+    return null;
+  };
+  const door0 = Math.round(ppm * 0.55),
+    door1 = Math.round(ppm * 1.4);
+  const doorway = (g: Seg, end: 0 | 1, pool: Set<Seg>) => {
+    const e = endA(g, end),
+      c = mid(g);
+    for (let k = door0; k <= door1; k++) {
+      const [x, y] = pt(g, e + dir(end) * k);
+      if (nearWall(x, y, 1)) return true;
+    }
+    for (const o of pool) {
+      if (o === g || o.axis !== g.axis || Math.abs(mid(o) - c) > 3) continue;
+      const gap = end ? o.a0 - g.a1 : g.a0 - o.a1;
+      if (gap >= door0 && gap <= door1) return true;
+    }
+    return false;
+  };
+  const held = (g: Seg, end: 0 | 1, pool: Set<Seg>) => touchesWall(g, end) || !!touchesLine(g, end, pool) || doorway(g, end, pool);
+
+  // keep removing lines that are not held at both ends
+  const wingLen = Math.round(ppm * 1.5);
+  const alive = new Set(cand);
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const g of [...alive]) {
+      const h0 = held(g, 0, alive),
+        h1 = held(g, 1, alive);
+      // a wing wall may end free in the room when it is long and solidly attached at the other end
+      const wing = g.a1 - g.a0 >= wingLen && (h0 || h1);
+      if (!(h0 && h1) && !wing) {
+        alive.delete(g);
+        changed = true;
+      }
+    }
+  }
+
+  // group into networks; a network must reach a real wall
+  const groups: Seg[][] = [];
+  const seen = new Set<Seg>();
+  for (const g of alive) {
+    if (seen.has(g)) continue;
+    const grp: Seg[] = [];
+    const st = [g];
+    seen.add(g);
+    while (st.length) {
+      const q = st.pop()!;
+      grp.push(q);
+      for (const o of alive) {
+        if (seen.has(o)) continue;
+        if (
+          touchesLine(q, 0, new Set([o])) ||
+          touchesLine(q, 1, new Set([o])) ||
+          touchesLine(o, 0, new Set([q])) ||
+          touchesLine(o, 1, new Set([q]))
+        ) {
+          seen.add(o);
+          st.push(o);
+        }
+      }
+    }
+    if (grp.some((q) => touchesWall(q, 0) || touchesWall(q, 1))) groups.push(grp);
+  }
+  if (!groups.length) return;
+
+  const half = Math.max(1, Math.round(ppm * 0.05));
+  const paint = (m: Uint8Array, g: Seg) => {
+    const c = mid(g);
+    // close the hairline to what holds the line, but keep doorway gaps at their drawn width
+    const ext = (end: 0 | 1) => (touchesWall(g, end) || touchesLine(g, end, alive) ? 2 : 0);
+    for (let a = g.a0 - ext(0); a <= g.a1 + ext(1); a++)
+      for (let k = -half; k <= half; k++) {
+        const [x, y] = pt(g, a, c + k);
+        if (x >= 0 && y >= 0 && x < w && y < h) m[y * w + x] = 1;
+      }
+  };
+  // a network that shuts a small doorless pocket against the walls is furniture (a bed, a sofa)
+  const pocket = 5 * ppm * ppm;
+  const freeSizes = (m: Uint8Array) => {
+    const comp = components(
+      m.map((v) => (v ? 0 : 1)),
+      w,
+      h,
+    );
+    return comp;
+  };
+  let base = wall.slice();
+  let before = freeSizes(base);
+  for (const grp of groups) {
+    const trial = base.slice();
+    for (const g of grp) paint(trial, g);
+    const after = freeSizes(trial);
+    let bad = false;
+    for (let l = 1; l < after.sizes.length && !bad; l++) {
+      if (after.sizes[l] >= pocket || after.sizes[l] < 0.1 * ppm * ppm) continue;
+      // find one pixel of this pocket and compare with the space it belonged to before
+      const b = after.boxes[l];
+      for (let y = b.y0; y <= b.y1 && !bad; y++)
+        for (let x = b.x0; x <= b.x1; x++) {
+          const i = y * w + x;
+          if (after.labels[i] !== l) continue;
+          const pl = before.labels[i];
+          if (pl && before.sizes[pl] > after.sizes[l] + 0.3 * ppm * ppm) bad = true;
+          break;
+        }
+    }
+    if (bad) continue;
+    base = trial;
+    before = after;
+  }
+  wall.set(base);
 }
 
 /** The flat itself: the largest enclosed body plus any sizeable part (e.g. a balcony), holes filled. */
@@ -778,10 +1105,15 @@ function mergeIslands(labels: Int32Array, sizes: number[], wall: Uint8Array, w: 
     }
     if (!total || strong / total > 0.5) continue;
     let best = 0;
+    // slivers between overlapping furniture outlines don't count when a real room is next door
+    const big = [...neigh.entries()].filter(([q]) => (sizes[q] || 0) >= maxPx);
+    if (big.length) for (const [q] of [...neigh.entries()]) if ((sizes[q] || 0) < maxPx) neigh.delete(q);
     if (neigh.size) {
       const [b0, cnt] = [...neigh.entries()].sort((a, b) => b[1] - a[1])[0];
       const others = [...neigh.values()].reduce((a, b) => a + b, 0) - cnt;
       if (others <= cnt * 0.25) best = b0;
+      // a sliver between two outlines goes with the larger space beside it
+      else if (px.length < maxPx / 4) best = [...neigh.keys()].sort((a, b) => (sizes[b] || 0) - (sizes[a] || 0))[0];
     }
     // drawn furniture often nests (bed inside a bed outline): take the room that surrounds it
     if (!best && strong / total < 0.2 && px.length < maxPx * 0.6) best = surrounding(labels, l, px, w, h, reach * 2);
@@ -836,8 +1168,8 @@ function measureWallThickness(wall: Uint8Array, w: number, h: number) {
     [0, 1],
     [0, -1],
   ];
-  for (let y = 1; y < h - 1; y += 2)
-    for (let x = 1; x < w - 1; x += 2) {
+  for (let y = 1; y < h - 1; y++)
+    for (let x = 1; x < w - 1; x++) {
       const i = y * w + x;
       if (wall[i]) continue;
       for (const [dx, dy] of dirs) {
@@ -963,7 +1295,10 @@ export function autoRooms(m: PlanModel, declaredRooms: number): PlanRoom[] {
     return Math.min(iw, ih) < 1.7 && Math.max(iw, ih) / Math.max(0.1, Math.min(iw, ih)) > 2.2;
   };
 
-  const exts = regs.map((r) => r.extWall).filter((v) => v > 0).sort((a, b) => a - b);
+  const exts = regs
+    .map((r) => r.extWall)
+    .filter((v) => v > 0)
+    .sort((a, b) => a - b);
   const medianExt = exts.length ? exts[Math.floor(exts.length / 2)] : 0;
   for (const r of regs) {
     if (used.has(r.label)) continue;
@@ -1018,11 +1353,23 @@ export function roomRectAt(r: Raster, m: PlanModel, s: PlanSettings, x: number, 
   const touchesEdge = b.x0 <= 1 || b.y0 <= 1 || b.x1 >= w - 2 || b.y1 >= h - 2;
   const m2 = area / (m.pxPerM * m.pxPerM);
   if (touchesEdge || m2 < 0.4 || area > w * h * 0.5) return null;
-  return { x0: Math.max(0, b.x0 - doorR), y0: Math.max(0, b.y0 - doorR), x1: Math.min(w - 1, b.x1 + doorR), y1: Math.min(h - 1, b.y1 + doorR) };
+  return {
+    x0: Math.max(0, b.x0 - doorR),
+    y0: Math.max(0, b.y0 - doorR),
+    x1: Math.min(w - 1, b.x1 + doorR),
+    y1: Math.min(h - 1, b.y1 + doorR),
+  };
 }
 
 export function defaultPlanSettings(): PlanSettings {
-  return { pxPerM: 50, threshold: 110, minWall: 5, doorGap: 0.95, rooms: [], calibrated: false };
+  return {
+    pxPerM: 50,
+    threshold: 110,
+    minWall: 5,
+    doorGap: 0.95,
+    rooms: [],
+    calibrated: false,
+  };
 }
 
 // ---------------------------------------------------------------- 3D helpers
