@@ -10,7 +10,9 @@ import * as THREE from 'three';
 import type { StyleDef } from '../lib/styles';
 import type { FurnitureKind } from '../lib/types';
 import { rugTexture } from './textures';
-import { artTexture, leafGeometry, softBox, turned, weaveNormal, woodGrain } from './shapes';
+import { artTexture, leafGeometry, softBox, turned, weaveNormal } from './shapes';
+import { hasReal, realFit, realTex } from './real';
+import { leafSway } from './anim';
 
 export interface Mats {
   wood: THREE.MeshPhysicalMaterial;
@@ -49,34 +51,74 @@ function fabricMat(color: string, kind: 'linen' | 'boucle' | 'velvet' | 'leather
   if (kind === 'leather')
     return new THREE.MeshPhysicalMaterial({
       color: c,
-      roughness: 0.48,
-      clearcoat: 0.25,
-      clearcoatRoughness: 0.55,
-      normalMap: weaveNormal('leather'),
-      normalScale: new THREE.Vector2(0.35, 0.35),
+      roughness: 0.5,
+      clearcoat: 0.3,
+      clearcoatRoughness: 0.5,
+      normalMap: realTex('leather_normal', 3),
+      normalScale: new THREE.Vector2(0.8, 0.8),
+    });
+  if (kind === 'velvet')
+    return new THREE.MeshPhysicalMaterial({
+      color: c,
+      roughness: 0.8,
+      sheen: 1,
+      sheenRoughness: 0.35,
+      sheenColor: c.clone().offsetHSL(0, -0.05, 0.3),
+      normalMap: realTex('velvet_normal', 3),
+      normalScale: new THREE.Vector2(0.5, 0.5),
     });
   return new THREE.MeshPhysicalMaterial({
     color: c,
-    roughness: kind === 'velvet' ? 0.75 : 0.92,
-    sheen: kind === 'velvet' ? 1 : 0.6,
-    sheenRoughness: kind === 'velvet' ? 0.35 : 0.8,
+    roughness: 0.92,
+    sheen: 0.6,
+    sheenRoughness: 0.8,
     sheenColor: c.clone().offsetHSL(0, -0.05, 0.25),
     normalMap: weaveNormal(kind),
     normalScale: new THREE.Vector2(kind === 'boucle' ? 0.9 : 0.45, kind === 'boucle' ? 0.9 : 0.45),
   });
 }
 
+/** Scanned wood (grain, relief, roughness) tinted to the style's species. */
 function woodMat(color: string, seed: number, gloss: boolean) {
+  const rep = seed === 1 ? 2.6 : 3;
+  const tint = new THREE.Color(color).multiplyScalar(1.45);
   return new THREE.MeshPhysicalMaterial({
-    color: '#ffffff',
-    map: woodGrain(color, seed),
-    roughness: gloss ? 0.32 : 0.58,
-    clearcoat: gloss ? 0.6 : 0.08,
-    clearcoatRoughness: 0.35,
+    color: tint,
+    map: realTex('wood_grain', rep),
+    normalMap: realTex('wood_normal', rep),
+    normalScale: new THREE.Vector2(0.7, 0.7),
+    roughnessMap: realTex('wood_orm', rep),
+    roughness: gloss ? 0.55 : 0.95,
+    clearcoat: gloss ? 0.55 : 0.05,
+    clearcoatRoughness: 0.3,
+  });
+}
+
+/** Real woven fabric for scatter cushions and throws, by style. */
+function patternMat(s: StyleDef, fallback: THREE.MeshPhysicalMaterial) {
+  const pat = s.id === 'classic' ? 'damask' : s.id === 'boho' ? 'paisley' : s.id === 'mediterranean' || s.id === 'scandi' ? 'stripe' : null;
+  if (!pat) return fallback;
+  const rep = pat === 'stripe' ? 3 : 2.2;
+  return new THREE.MeshPhysicalMaterial({
+    color: pat === 'stripe' ? new THREE.Color(s.accent).lerp(new THREE.Color('#ffffff'), 0.35) : '#ffffff',
+    map: realTex(pat, rep),
+    normalMap: realTex((pat + '_normal') as 'damask_normal', rep),
+    normalScale: new THREE.Vector2(0.6, 0.6),
+    roughness: 0.9,
+    sheen: 0.5,
+    sheenRoughness: 0.7,
+    sheenColor: new THREE.Color('#ffffff'),
   });
 }
 
 export function makeMats(s: StyleDef): Mats {
+  const mats = buildMats(s);
+  leafSway(mats.leaf);
+  leafSway(mats.leafDark);
+  return mats;
+}
+
+function buildMats(s: StyleDef): Mats {
   const upholstery: 'linen' | 'boucle' | 'velvet' | 'leather' =
     s.id === 'industrial' ? 'leather' : s.id === 'classic' ? 'velvet' : s.id === 'japandi' || s.id === 'boho' ? 'boucle' : 'linen';
   const gloss = s.id === 'classic' || s.id === 'modern';
@@ -85,7 +127,7 @@ export function makeMats(s: StyleDef): Mats {
     woodDark: woodMat(s.woodDark, 2, gloss),
     fabric: fabricMat(s.fabric, upholstery),
     fabricAlt: fabricMat(s.fabricAlt, s.id === 'classic' ? 'velvet' : 'linen'),
-    accent: fabricMat(s.accent, 'linen'),
+    accent: patternMat(s, fabricMat(s.accent, 'linen')),
     linen: fabricMat('#efebe3', 'linen'),
     bedding: fabricMat(s.id === 'industrial' ? '#d9d6d0' : '#f4f1ea', 'linen'),
     metal: new THREE.MeshStandardMaterial({ color: s.metal, roughness: s.metalRough, metalness: 0.9 }),
@@ -193,6 +235,11 @@ function legs(g: THREE.Group, s: StyleDef, m: Mats, w: number, d: number, h: num
 // ---------------------------------------------------------------- decor
 
 function vase(m: Mats, x: number, y: number, z: number, scale = 1, dark = false) {
+  if (scale >= 0.85 && hasReal('flowers')) {
+    const r = realFit('flowers', { width: 0.24 * scale })!;
+    r.position.set(x, y, z);
+    return r;
+  }
   const g = new THREE.Group();
   const p: [number, number][] = [
     [0, 0],
@@ -280,6 +327,11 @@ export function wallArt(s: StyleDef, m: Mats, w = 1.0, h = 0.75, variant = 0) {
 // ---------------------------------------------------------------- pieces
 
 function sofa(s: StyleDef, m: Mats, w = 2.3) {
+  const realId = s.id === 'classic' ? 'carvedSofa' : s.id === 'modern' ? 'glamSofa' : null;
+  if (realId && hasReal(realId)) {
+    const r = realFit(realId, { width: Math.min(w, realId === 'carvedSofa' ? 2.45 : 2.3) });
+    if (r) return r;
+  }
   const g = new THREE.Group();
   const d = 0.98;
   const legH = s.id === 'japandi' || s.id === 'boho' ? 0.05 : 0.13;
@@ -329,6 +381,11 @@ function sofa(s: StyleDef, m: Mats, w = 2.3) {
 }
 
 function armchair(s: StyleDef, m: Mats) {
+  const realId = s.id === 'classic' ? 'damaskChair' : s.id === 'boho' || s.id === 'mediterranean' || s.id === 'modern' ? 'velvetChair' : null;
+  if (realId && hasReal(realId)) {
+    const r = realFit(realId, { width: 0.82 });
+    if (r) return r;
+  }
   const g = new THREE.Group();
   const w = 0.78,
     d = 0.82,
@@ -438,9 +495,9 @@ function pendant(s: StyleDef, m: Mats, drop: number) {
   g.add(cyl(0.05, 0.05, 0.02, m.black, 0, -0.02, 0, 16));
   let shade: THREE.Mesh;
   if (s.id === 'industrial' || s.id === 'modern')
-    shade = lathe([[0.02, 0], [0.04, -0.02], [0.08, -0.08], [0.22, -0.22], [0.23, -0.23]], m.metal, 0, -drop, 0);
-  else if (s.id === 'japandi' || s.id === 'scandi') shade = mesh(new THREE.SphereGeometry(0.19, 40, 24), m.lampShade, 0, -drop - 0.16, 0);
-  else shade = lathe([[0.03, 0], [0.12, -0.03], [0.26, -0.24], [0.28, -0.3]], m.rattan, 0, -drop, 0);
+    shade = lathe([[0.02, 0], [0.04, -0.02], [0.07, -0.07], [0.18, -0.18], [0.19, -0.19]], m.metal, 0, -drop, 0);
+  else if (s.id === 'japandi' || s.id === 'scandi') shade = mesh(new THREE.SphereGeometry(0.16, 40, 24), m.lampShade, 0, -drop - 0.14, 0);
+  else shade = lathe([[0.025, 0], [0.09, -0.025], [0.19, -0.18], [0.2, -0.22]], m.rattan, 0, -drop, 0);
   (shade.material as THREE.Material).side = THREE.DoubleSide;
   shade.castShadow = false;
   if (shade.material === m.lampShade) shade.userData.lamp = true;
@@ -487,8 +544,12 @@ function diningTable(s: StyleDef, m: Mats, seats = 6) {
   // table styling: runner, vase, bowl
   if (!round) g.add(block(Math.min(w - 0.4, 1.2), 0.004, 0.36, m.linen, 0, 0.76, 0, 0.001));
   g.add(vase(m, -0.15, 0.76, 0, 1.1));
-  g.add(bowl(m, 0.25, 0.76, 0.05));
-  const p = pendant(s, m, 0.95);
+  const olives = hasReal('olives') ? realFit('olives', { width: 0.3 }) : null;
+  if (olives) {
+    olives.position.set(0.3, 0.76, 0.05);
+    g.add(olives);
+  } else g.add(bowl(m, 0.25, 0.76, 0.05));
+  const p = pendant(s, m, 0.8);
   p.position.y = 2.7;
   p.userData.pendant = true;
   g.add(p);
@@ -606,8 +667,12 @@ function desk(s: StyleDef, m: Mats) {
 }
 
 function plant(s: StyleDef, m: Mats, tall = 1.4) {
-  const g = new THREE.Group();
   const big = tall > 1.1;
+  if (hasReal('plant') && (!big || s.id === 'mediterranean' || s.id === 'boho' || tall <= 1.3)) {
+    const r = realFit('plant', { height: Math.min(1.25, tall * 0.85) });
+    if (r) return r;
+  }
+  const g = new THREE.Group();
   const potH = big ? 0.42 : 0.3,
     potR = big ? 0.2 : 0.15;
   if (s.id === 'boho' || s.id === 'mediterranean') {
@@ -853,7 +918,7 @@ export function kitchenRun(s: StyleDef, m: Mats, len: number, withUppers = true)
   g.add(block(0.5, 0.006, 0.4, m.black, sx, 0.894, 0.02, 0.002));
   const tap = new THREE.Group();
   tap.add(cyl(0.015, 0.018, 0.3, m.metal, 0, 0, 0, 16));
-  const spout = cyl(0.01, 0.01, 0.2, m.metal, 0, 0.3, 0.08, 12);
+  const spout = cyl(0.01, 0.01, 0.2, m.metal, 0, 0.2, 0.08, 12);
   spout.rotation.x = Math.PI / 2;
   tap.add(spout);
   tap.position.set(sx, 0.895, -0.22);
@@ -903,6 +968,12 @@ export function bathSet(s: StyleDef, m: Mats, len: number) {
   const glow = block(vw * 0.82, 0.82, 0.005, m.bulb, 0, 1.14, -0.242, 0.001);
   glow.castShadow = false;
   g.add(glow);
+  // wall light above the mirror
+  const sconce = hasReal('sconce') ? realFit('sconce', { height: 0.26 }) : null;
+  if (sconce) {
+    sconce.position.set(0, 1.62, -0.24 + 0.12);
+    g.add(sconce);
+  }
   // towel on a rail
   g.add(cyl(0.008, 0.008, 0.5, m.metal, -vw / 2 - 0.35, 1.2, -0.2, 8).rotateZ(Math.PI / 2));
   g.add(soft(0.42, 0.55, 0.04, 0.015, 0.1, m.linen, -vw / 2 - 0.35, 0.68, -0.18));

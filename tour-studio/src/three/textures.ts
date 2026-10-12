@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FloorKind, RugPattern } from '../lib/styles';
+import { realTex } from './real';
 
 function rng(seed: number) {
   let s = seed >>> 0;
@@ -45,7 +46,30 @@ function grain(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: 
 }
 
 /** Returns a repeating floor texture and how many metres one tile covers. */
-export function floorTexture(kind: FloorKind, tone: string): { tex: THREE.Texture; metres: number; rough: number } {
+export interface FloorFinish {
+  tex: THREE.Texture;
+  metres: number;
+  rough: number;
+  color?: THREE.Color;
+  bump?: THREE.Texture;
+  roughMap?: THREE.Texture;
+}
+
+/** Plank floors use a scanned hardwood floor, tinted to the style's tone. */
+export function floorTexture(kind: FloorKind, tone: string): FloorFinish {
+  if (kind === 'oak' || kind === 'walnut')
+    return {
+      tex: realTex('floor_wood'),
+      metres: 1.8,
+      rough: 1,
+      color: new THREE.Color(tone).multiplyScalar(1.3),
+      bump: realTex('floor_bump'),
+      roughMap: realTex('floor_rough'),
+    };
+  return proceduralFloor(kind, tone);
+}
+
+function proceduralFloor(kind: FloorKind, tone: string): FloorFinish {
   const [c, g] = canvas(1024);
   const r = rng(kind.length * 977 + tone.charCodeAt(2));
   let metres = 4;

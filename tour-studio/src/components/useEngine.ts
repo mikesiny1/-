@@ -3,6 +3,7 @@ import { getRaster, modelFor } from '../lib/project';
 import type { Project } from '../lib/types';
 import { TourEngine } from '../three/engine';
 import { loadLibrary } from '../three/library';
+import { loadRealModels } from '../three/real';
 
 /** Creates a TourEngine inside `ref` and keeps it in sync with the project. */
 export function useEngine(ref: RefObject<HTMLDivElement>, p: Project, enabled = true) {
@@ -21,6 +22,7 @@ export function useEngine(ref: RefObject<HTMLDivElement>, p: Project, enabled = 
     }
     setEngine(e);
     loadLibrary().then((lib) => lib.size && e.setLibrary(lib));
+    loadRealModels().then(() => e.refurnish());
     return () => {
       e.dispose();
       setEngine(null);

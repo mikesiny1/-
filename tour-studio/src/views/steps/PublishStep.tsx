@@ -51,6 +51,9 @@ export default function PublishStep({ p, update }: StepProps) {
   const cancel = useRef({ cancelled: false });
   const { engine, ready } = useEngine(hidden, p, source === '3d' && has3d);
   const cap = useMemo(() => captions(p, brand), [p, brand]);
+  useEffect(() => {
+    if (engine) engine.idle = true;
+  }, [engine]);
 
   useEffect(() => {
     blobUrl(p.coverBlobId).then(setCoverUrl);

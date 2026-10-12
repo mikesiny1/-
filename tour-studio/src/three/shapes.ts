@@ -43,7 +43,7 @@ export function softBox(w: number, h: number, d: number, r: number, puff = 0) {
     pos.setXYZ(i, v.x, v.y, v.z);
   }
   g.computeVertexNormals();
-  boxUV(g, Math.max(w, h, d));
+  boxUV(g, 1);
   geoCache.set(key, g);
   return g;
 }

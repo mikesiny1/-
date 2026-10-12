@@ -9,6 +9,8 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { astar, classifyOpening, dilate, downsample, mergeRects, regionAt, type PlanModel } from '../lib/plan';
 import { buildOpening, glazing, openingMats, type OpeningSpec } from './openings';
+import { loadInteriorEnv, loadView, realFit, type WindowView } from './real';
+import { curtainBreeze, dustMotes, timeUniform } from './anim';
 import { roomName, styleById, type StyleDef } from '../lib/styles';
 import type { DesignBrief, FurnitureKind, PlanRoom, RoomType } from '../lib/types';
 import { bathSet, buildFurniture, disposeGroup, FOOTPRINT, kitchenRun, makeMats, showerGlass, type Mats } from './furniture';
@@ -102,6 +104,11 @@ export class TourEngine {
   private resizeObs: ResizeObserver;
   private dragging: { x: number; y: number; moved: boolean } | null = null;
   private city: THREE.Group;
+  private sky: THREE.Mesh;
+  private photoSky = false;
+  private view: WindowView | null = null;
+  private dust = new THREE.Group();
+  private disposed = false;
   private openingsGroup = new THREE.Group();
   private windowLights = new THREE.Group();
   private openingSpecs: OpeningSpec[] = [];
@@ -110,6 +117,8 @@ export class TourEngine {
   private gtao: GTAOPass | null = null;
   /** ambient occlusion and multisampled post-processing; off for slow devices */
   hq = true;
+  /** an engine kept only for video export renders nothing until it is used */
+  idle = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -127,6 +136,13 @@ export class TourEngine {
 
     const pm = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+    // a photographed interior gives real reflections and soft bounce light
+    loadInteriorEnv()
+      .then((t) => {
+        if (this.disposed) return;
+        this.scene.environment = pm.fromEquirectangular(t).texture;
+      })
+      .catch(() => {});
     this.scene.environmentIntensity = 0.55;
     this.scene.background = new THREE.Color('#e6e3dc');
 
@@ -135,6 +151,7 @@ export class TourEngine {
       new THREE.MeshBasicMaterial({ map: skyTexture(), side: THREE.BackSide, fog: false }),
     );
     this.scene.add(sky);
+    this.sky = sky;
     this.city = cityContext();
     this.scene.add(this.city);
 
@@ -143,6 +160,7 @@ export class TourEngine {
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.hemi, this.sun, this.sun.target);
+    this.scene.add(this.dust);
     this.scene.add(this.structure, this.ceiling, this.fixtures, this.furniture, this.roomLights, this.openingsGroup, this.windowLights);
 
     try {
@@ -313,7 +331,7 @@ export class TourEngine {
     };
     const ft = floorTexture(this.style.floor, this.style.floorTone);
     const floors: [Uint8Array, THREE.Material, number, string][] = [
-      [finish.main, new THREE.MeshStandardMaterial({ map: ft.tex, roughness: ft.rough }), ft.metres, 'floor-main'],
+      [finish.main, floorMaterial(ft), ft.metres, 'floor-main'],
       [finish.wet, new THREE.MeshStandardMaterial({ map: smallTileTexture('#d8d6d1'), roughness: 0.35 }), 1.2, 'floor-wet'],
       [finish.deck, new THREE.MeshStandardMaterial({ map: smallTileTexture('#c9bfae', 'rgba(0,0,0,0.25)', 4), roughness: 0.8 }), 2.4, 'floor-deck'],
     ];
@@ -397,6 +415,8 @@ export class TourEngine {
           if (x >= 0 && y >= 0 && x < fgw && y < fgh) block[y * fgw + x] = 1;
     }
     this.grid = { block, gw: fgw, gh: fgh, cell: navCell };
+    this.clear(this.dust);
+    this.dust.add(dustMotes(this.rooms.filter((r) => r.type !== 'balcony').map((r) => r.inner)));
 
     this.applyBrief(brief, true);
     this.setMode(this.mode);
@@ -560,11 +580,9 @@ export class TourEngine {
       const floor = this.structure.getObjectByName('floor-main') as THREE.Mesh | undefined;
       if (floor) {
         const ft = floorTexture(this.style.floor, this.style.floorTone);
-        const mat = floor.material as THREE.MeshStandardMaterial;
-        mat.map?.dispose();
-        mat.map = ft.tex;
-        mat.roughness = ft.rough;
-        mat.needsUpdate = true;
+        const old = floor.material as THREE.Material;
+        floor.material = floorMaterial(ft);
+        old.dispose();
         // re-scale uv to the new texture size
         const g = floor.geometry;
         const pos = g.attributes.position,
@@ -580,6 +598,7 @@ export class TourEngine {
     }
     this.furniture.visible = brief.furnish;
     this.setLighting(brief.light);
+    this.setView(brief.view || 'nature');
   }
 
   private furnish() {
@@ -609,6 +628,10 @@ export class TourEngine {
           rd = Math.min(2.0, zone - 1.1);
         if (rd > 1) add(F, this.put(this.piece('rug', { w: rw, d: rd }), r, a, 0, 0.75 + rd / 2));
         add(F, this.put(this.piece('coffeeTable'), r, a, 0, 1.55));
+        if (s.id === 'classic' || s.id === 'boho' || s.id === 'modern') {
+          const pouf = realFit('pouf', { width: 0.58 });
+          if (pouf) add(F, this.put(pouf, r, a, -(sw / 2 - 0.25), 1.75));
+        }
         if (D <= 5.4 && D >= 2.8) add(F, this.put(this.piece('tvUnit', { w: Math.min(1.9, L - 0.6) }), r, opp, 0, 0.23));
         else if (D > 5.4) {
           for (const sg of [-1, 1]) add(F, this.put(this.piece('armchair'), r, a, sg * 0.5, 2.75, 'out'));
@@ -732,6 +755,7 @@ export class TourEngine {
     const walls = this.structure.getObjectByName('walls') as THREE.Mesh | undefined;
     const wallMat = (walls?.material as THREE.Material) || new THREE.MeshStandardMaterial({ color: this.style.wall });
     const om = openingMats(this.style, this.mats, wallMat);
+    curtainBreeze(om.curtain);
     this.openingMatsCache = om;
     for (const spec of this.openingSpecs) this.openingsGroup.add(buildOpening(spec, om, WALL_H));
     // daylight through the glass: soft area lights at the biggest openings
@@ -897,8 +921,17 @@ export class TourEngine {
       z = a.z + (b.z - a.z) * u;
     const yaw = a.yaw + (b.yaw - a.yaw) * u;
     const pitch = a.pitch + (b.pitch - a.pitch) * u;
-    this.camera.position.set(x, EYE, z);
-    this.camera.lookAt(x + Math.sin(yaw) * Math.cos(pitch), EYE + Math.sin(pitch), z + Math.cos(yaw) * Math.cos(pitch));
+    // a hint of hand-held camera: breathing, not shaking
+    const hx = Math.sin(t * 0.71) * 0.008 + Math.sin(t * 1.9) * 0.002;
+    const hy = Math.sin(t * 0.53 + 1) * 0.006;
+    const hyaw = Math.sin(t * 0.37) * 0.004;
+    this.camera.position.set(x + hx * Math.cos(yaw), EYE + hy, z - hx * Math.sin(yaw));
+    const ly = yaw + hyaw;
+    this.camera.lookAt(
+      this.camera.position.x + Math.sin(ly) * Math.cos(pitch),
+      this.camera.position.y + Math.sin(pitch),
+      this.camera.position.z + Math.cos(ly) * Math.cos(pitch),
+    );
     return { room: this.tourRooms[a.room] || null, overview: false };
   }
 
@@ -907,7 +940,7 @@ export class TourEngine {
   setMode(mode: Mode) {
     this.mode = mode;
     this.controls.enabled = mode === 'doll';
-    this.city.visible = mode !== 'doll';
+    this.city.visible = mode !== 'doll' && !this.photoSky;
     if (mode === 'doll') {
       this.ceiling.visible = false;
       this.camera.position.set(this.extent * 0.55, this.extent * 1.05 + 2, this.extent * 0.75);
@@ -1065,6 +1098,50 @@ export class TourEngine {
     this.updateFov();
   }
 
+  /** Everything that moves on its own: breeze, leaves, dust, clouds, the sun. */
+  private tick(seconds: number) {
+    timeUniform.value = seconds;
+    if (this.photoSky && this.viewTex) {
+      // the real panorama belongs to the windows; overhead views get a calm studio backdrop
+      const inside = this.mode !== 'doll' && this.ceiling.visible;
+      this.scene.background = inside ? this.viewTex : this.studioBg;
+      this.scene.backgroundRotation.y = this.viewRotation + seconds * 0.004;
+    }
+    const a = 0.9 + seconds * 0.002;
+    this.sun.position.set(Math.cos(a) * 12, 18, Math.sin(a) * 12);
+    this.dust.visible = this.brief?.light !== 'evening' && this.mode !== 'doll' && this.ceiling.visible;
+  }
+
+  private viewRotation = 0;
+  private viewTex: THREE.Texture | null = null;
+  private studioBg = new THREE.Color('#d9d5cd');
+
+  /** The real panorama seen through the windows. */
+  setView(view: WindowView) {
+    if (this.view === view) return;
+    this.view = view;
+    loadView(view)
+      .then((t) => {
+        if (this.disposed || this.view !== view) return;
+        this.viewTex = t;
+        this.scene.background = t;
+        this.scene.backgroundIntensity = 0.6;
+        this.viewRotation = view === 'sea' ? 2.2 : view === 'city' ? 0.6 : 1.2;
+        this.photoSky = true;
+        this.sky.visible = false;
+        this.city.visible = false;
+      })
+      .catch(() => {});
+  }
+
+  /** Rebuild furniture after real models or the user's library finished loading. */
+  refurnish() {
+    if (!this.model) return;
+    this.furnish();
+    this.refreshNav();
+    this.furniture.visible = this.brief?.furnish ?? true;
+  }
+
   private draw() {
     if (this.hq && this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
@@ -1072,9 +1149,10 @@ export class TourEngine {
 
   private loop(now: number) {
     this.raf = requestAnimationFrame(this.loop);
-    if (this.exporting) return;
+    if (this.exporting || this.idle) return;
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
+    this.tick(now / 1000);
     let info: FrameInfo = { t: this.t, duration: this.duration, room: '', area: 0, fade: 0 };
     if (this.mode === 'tour') {
       if (this.playing) {
@@ -1086,7 +1164,7 @@ export class TourEngine {
       }
       const p = this.poseAt(this.t);
       this.ceiling.visible = !p.overview;
-      this.city.visible = !p.overview;
+      this.city.visible = !p.overview && !this.photoSky;
       info = { t: this.t, duration: this.duration, room: p.room?.name || '', area: p.room?.areaM2 || 0, fade: this.fadeAt(this.t) };
     } else if (this.mode === 'walk') {
       this.stepWalk(dt);
@@ -1129,7 +1207,8 @@ export class TourEngine {
   renderAt(t: number) {
     const p = this.poseAt(t);
     this.ceiling.visible = !p.overview;
-    this.city.visible = !p.overview;
+    this.city.visible = !p.overview && !this.photoSky;
+    this.tick(t);
     this.draw();
     return { room: p.room?.name || '', area: p.room?.areaM2 || 0, fade: this.fadeAt(t) };
   }
@@ -1152,6 +1231,7 @@ export class TourEngine {
   }
 
   dispose() {
+    this.disposed = true;
     cancelAnimationFrame(this.raf);
     window.removeEventListener('keydown', this.onKey);
     window.removeEventListener('keyup', this.onKey);
@@ -1219,4 +1299,17 @@ function cityContext() {
     g.add(t);
   }
   return g;
+}
+
+function floorMaterial(ft: import('./textures').FloorFinish) {
+  return new THREE.MeshPhysicalMaterial({
+    map: ft.tex,
+    color: ft.color || new THREE.Color('#ffffff'),
+    roughness: ft.rough,
+    roughnessMap: ft.roughMap || null,
+    bumpMap: ft.bump || null,
+    bumpScale: 1.2,
+    clearcoat: ft.bump ? 0.25 : 0.1,
+    clearcoatRoughness: 0.4,
+  });
 }

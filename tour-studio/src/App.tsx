@@ -5,6 +5,7 @@ import { ToastHost } from './components/ui';
 import Dashboard from './views/Dashboard';
 import Settings from './views/Settings';
 import Library from './views/Library';
+import Credits from './views/Credits';
 import ProjectView from './views/ProjectView';
 import Present from './views/Present';
 
@@ -48,6 +49,7 @@ export default function App() {
   if (parts[0] === 'p' && parts[1]) view = <ProjectView id={parts[1]} step={parts[2] || 'details'} />;
   else if (parts[0] === 'settings') view = <Settings />;
   else if (parts[0] === 'library') view = <Library />;
+  else if (parts[0] === 'credits') view = <Credits />;
   else view = <Dashboard />;
 
   if (parts[0] === 'present' && parts[1])

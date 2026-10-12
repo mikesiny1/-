@@ -4,7 +4,8 @@ import { blobUrl, loadImage, uid } from '../../lib/db';
 import { drawStaged } from '../../lib/photoTour';
 import { FURNITURE_NAMES, ROOM_TYPES, styleById } from '../../lib/styles';
 import type { FurnitureKind, PhotoEntry, RoomType, StagedItem, StyleId } from '../../lib/types';
-import { furnitureSprite } from '../../three/sprites';
+import { clearSpriteCache, furnitureSprite } from '../../three/sprites';
+import { loadRealModels } from '../../three/real';
 import type { StepProps } from '../ProjectView';
 
 const KINDS: FurnitureKind[] = [
@@ -86,6 +87,13 @@ export default function PhotosStep({ p, update, next }: StepProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
   const style = p.design.style;
+  const [realReady, setRealReady] = useState(false);
+  useEffect(() => {
+    loadRealModels().then(() => {
+      clearSpriteCache();
+      setRealReady(true);
+    });
+  }, []);
   const photo = p.photos.find((x) => x.id === sel) || p.photos[0];
 
   useEffect(() => {
@@ -127,7 +135,7 @@ export default function PhotosStep({ p, update, next }: StepProps) {
       g.strokeRect(it.x * W - w / 2, it.y * H - h, w, h);
       g.setLineDash([]);
     }
-  }, [img, photo, style, item, show]);
+  }, [img, photo, style, item, show, realReady]);
 
   if (!photo) return <p className="muted">לא הועלו תמונות.</p>;
 
@@ -327,7 +335,7 @@ export default function PhotosStep({ p, update, next }: StepProps) {
                 <div className="fgrid">
                   {KINDS.map((k) => (
                     <button key={k} onClick={() => add(k)}>
-                      <Thumb kind={k} style={style} />
+                      <Thumb key={String(realReady)} kind={k} style={style} />
                       {FURNITURE_NAMES[k]}
                     </button>
                   ))}

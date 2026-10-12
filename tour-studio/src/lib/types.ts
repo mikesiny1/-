@@ -114,6 +114,8 @@ export interface DesignBrief {
   household: Household;
   budget: Budget;
   light: 'day' | 'evening';
+  /** what the windows look out on */
+  view?: 'nature' | 'sea' | 'city';
 }
 
 export interface ShareLog {

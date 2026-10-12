@@ -219,6 +219,20 @@ export default function TourStep({ p, update, next }: StepProps) {
                   ))}
                 </div>
               </div>
+              <div>
+                <div className="small muted" style={{ marginBottom: 8 }}>
+                  הנוף מהחלונות
+                </div>
+                <Seg
+                  value={b.view || 'nature'}
+                  onChange={(v) => set('view', v)}
+                  options={[
+                    { id: 'nature', label: 'טבע' },
+                    { id: 'sea', label: 'ים' },
+                    { id: 'city', label: 'עיר' },
+                  ]}
+                />
+              </div>
               <div className="row">
                 <Seg
                   value={b.light}
