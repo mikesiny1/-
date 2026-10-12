@@ -10,6 +10,12 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 
 export const mediaUrl = (path: string) => new URL('media/' + path, document.baseURI).toString();
 
+/**
+ * Some hosts only serve web media types. A page can set window.__MEDIA_COMPAT to load the same
+ * assets as self-contained glTF JSON and tone-mapped JPG panoramas instead of GLB/HDR/EXR.
+ */
+export const mediaCompat = () => !!(window as unknown as { __MEDIA_COMPAT?: boolean }).__MEDIA_COMPAT;
+
 export type RealId = 'glamSofa' | 'carvedSofa' | 'damaskChair' | 'velvetChair' | 'pouf' | 'flowers' | 'plant' | 'olives' | 'sconce';
 
 const FILES: Record<RealId, string> = {
@@ -33,7 +39,8 @@ export function loadRealModels() {
   loading = Promise.all(
     (Object.keys(FILES) as RealId[]).map(async (id) => {
       try {
-        const g = await loader.loadAsync(mediaUrl('models/' + FILES[id]));
+        const file = FILES[id];
+        const g = await loader.loadAsync(mediaUrl(mediaCompat() ? 'models-json/' + file.replace('.glb', '.json') : 'models/' + file));
         g.scene.traverse((o) => {
           const m = o as THREE.Mesh;
           if (m.isMesh) {
@@ -137,7 +144,7 @@ export function loadView(view: WindowView) {
   const f = VIEWS[view];
   let p = hdrCache.get(f);
   if (!p) {
-    p = new RGBELoader().loadAsync(mediaUrl('hdri/' + f)).then((t) => {
+    p = (mediaCompat() ? jpgPanorama('hdri-jpg/' + f.replace('.hdr', '.jpg')) : new RGBELoader().loadAsync(mediaUrl('hdri/' + f))).then((t) => {
       t.mapping = THREE.EquirectangularReflectionMapping;
       return t;
     });
@@ -150,11 +157,18 @@ export function loadView(view: WindowView) {
 export function loadInteriorEnv() {
   let p = hdrCache.get('apartment');
   if (!p) {
-    p = new EXRLoader().loadAsync(mediaUrl('hdri/apartment.exr')).then((t) => {
+    p = (mediaCompat() ? jpgPanorama('hdri-jpg/apartment.jpg') : new EXRLoader().loadAsync(mediaUrl('hdri/apartment.exr'))).then((t) => {
       t.mapping = THREE.EquirectangularReflectionMapping;
       return t;
     });
     hdrCache.set('apartment', p);
   }
   return p;
+}
+
+function jpgPanorama(path: string) {
+  return texLoader.loadAsync(mediaUrl(path)).then((t) => {
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  });
 }
