@@ -67,6 +67,8 @@ export interface PlanSettings {
   thinLines?: boolean;
   /** close double-line (unfilled) walls up to this thickness, metres */
   fillOutline?: number;
+  /** where the scale came from */
+  scaleSource?: 'doors' | 'area' | 'guess' | 'manual';
 }
 
 export type FurnitureKind =

@@ -409,7 +409,8 @@ export class TourEngine {
         block[gy * fgw + gx] = !model.interior[i] || blockedPx[i] ? 1 : 0;
       }
     for (const o of model.openings) {
-      if (classifyOpening(o, isBalcony) !== 'window') continue;
+      const k = classifyOpening(o, isBalcony);
+      if (k !== 'window' && k !== 'facade') continue;
       for (let y = Math.floor(o.y0 / navCell) - 1; y <= Math.ceil(o.y1 / navCell) + 1; y++)
         for (let x = Math.floor(o.x0 / navCell) - 1; x <= Math.ceil(o.x1 / navCell) + 1; x++)
           if (x >= 0 && y >= 0 && x < fgw && y < fgh) block[y * fgw + x] = 1;
@@ -695,7 +696,7 @@ export class TourEngine {
         }
         for (const sg of [-1, 1]) add(F, this.put(this.piece('plant', { w: 1.3 }), r, a, sg * (L / 2 - 0.3), 0.3));
       } else if (r.type === 'hall') {
-        if (L >= 1.8 && D >= 1.1) add(F, this.put(this.piece('sideboard', { w: Math.min(1.4, L - 0.5) }), r, a, 0, 0.22));
+        if (L >= 2.2 && D >= 1.5) add(F, this.put(this.piece('sideboard', { w: Math.min(1.4, L - 0.6) }), r, a, 0, 0.22));
       }
     }
     // curtains are styling, so they come and go with the furniture
@@ -801,7 +802,13 @@ export class TourEngine {
       return;
     }
     const order: EngineRoom[] = [];
-    const pool = this.rooms.filter((r) => r.type !== 'storage');
+    // corridors and stores are walked through, not presented
+    const pool = this.rooms.filter((r) => {
+      if (r.type === 'storage' || r.type === 'hall') return false;
+      const W = r.inner.x1 - r.inner.x0,
+        D = r.inner.z1 - r.inner.z0;
+      return Math.min(W, D) >= 1.2 || r.type === 'bathroom';
+    });
     const living = pool.find((r) => r.type === 'living') || pool[0];
     order.push(living);
     let rest = pool.filter((r) => r !== living);

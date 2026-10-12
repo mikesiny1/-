@@ -1,5 +1,5 @@
 /** Draws an architect-style sample plan (5 rooms, ~105 m²) so the studio can be tried without files. */
-export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' = 'solid'): HTMLCanvasElement {
+export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' | 'glass' = 'solid'): HTMLCanvasElement {
   const S = 60; // px per metre
   const M = 1.4; // margin in metres
   const c = document.createElement('canvas');
@@ -114,6 +114,42 @@ export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' = 'solid'): H
   glazeV(0, 5.6, 7.6);
   glazeH(9, 0.6, 5.4);
   glazeH(9, 9.6, 11.2);
+
+  if (variant === 'glass') {
+    // developer-plan look: the living room facades are full-height glazing drawn in thin grey
+    g.fillStyle = '#fbfbf8';
+    g.fillRect(X(-0.2), Y(4.2), 0.4 * S, 4.9 * S); // left facade of the living room
+    g.fillRect(X(-0.2), Y(8.8), 8.6 * S, 0.4 * S); // living facade towards the balcony
+    g.strokeStyle = '#b4bcc0';
+    g.lineWidth = 1.5;
+    for (const o of [-0.06, 0.06]) {
+      g.beginPath();
+      g.moveTo(X(o), Y(4.2));
+      g.lineTo(X(o), Y(9));
+      g.moveTo(X(0), Y(9 + o));
+      g.lineTo(X(8.4), Y(9 + o));
+      g.stroke();
+    }
+    g.fillStyle = '#9aa3a8';
+    for (let y = 4.4; y < 9; y += 1.2) g.fillRect(X(-0.08), Y(y), 0.16 * S, 0.06 * S);
+    for (let x = 0.2; x < 8.4; x += 1.4) g.fillRect(X(x), Y(8.92), 0.06 * S, 0.16 * S);
+    // grey furniture symbols, as in sales plans
+    g.strokeStyle = '#a9a9a9';
+    g.lineWidth = 1;
+    g.strokeRect(X(0.6), Y(5.0), 2.4 * S, 0.9 * S);
+    g.strokeRect(X(0.6), Y(5.0), 0.9 * S, 2.0 * S);
+    for (const [cx, cy] of [[3.6, 7.3], [5.6, 7.3]]) {
+      g.beginPath();
+      g.arc(X(cx), Y(cy), 0.6 * S, 0, Math.PI * 2);
+      g.stroke();
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2;
+        g.strokeRect(X(cx + Math.cos(a) * 0.85) - 0.2 * S, Y(cy + Math.sin(a) * 0.85) - 0.2 * S, 0.4 * S, 0.4 * S);
+      }
+    }
+    g.strokeRect(X(9.6), Y(6.4), 1.8 * S, 2.1 * S);
+    g.strokeRect(X(10.3), Y(0.5), 1.6 * S, 2.0 * S);
+  }
 
   // door swings
   const swing = (cx: number, cy: number, r: number, a0: number, a1: number) => {

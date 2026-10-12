@@ -139,6 +139,15 @@ export function buildOpening(o: OpeningSpec, mats: OpeningMats, wallH: number, p
       panel.position.set(x, 0, z);
       g.add(panel);
     }
+  } else if (o.kind === 'facade') {
+    // floor-to-ceiling glass wall with slim mullions
+    const head = wallH - 0.12;
+    g.add(box(W + 0.002, wallH - head, T, mats.wall, 0, head, 0));
+    g.add(box(W, 0.05, 0.07, mats.frame, 0, 0, 0));
+    g.add(box(W, 0.05, 0.07, mats.frame, 0, head - 0.05, 0));
+    const n = Math.max(1, Math.round(W / 1.3));
+    for (let i = 0; i <= n; i++) g.add(box(0.045, head, 0.07, mats.frame, -W / 2 + (W / n) * i, 0, 0));
+    for (let i = 0; i < n; i++) g.add(glassPane(W / n - 0.05, head - 0.1, mats.glass, -W / 2 + (W / n) * (i + 0.5), 0.05, 0));
   } else if (o.kind === 'passage') {
     if (W < 2.6) head(2.35);
   } else {
@@ -177,10 +186,10 @@ export function buildOpening(o: OpeningSpec, mats: OpeningMats, wallH: number, p
 }
 
 function addCurtains(g: THREE.Group, o: OpeningSpec, mats: OpeningMats) {
-  if (!o.curtains || (o.kind !== 'window' && o.kind !== 'slider')) return g;
+  if (!o.curtains || (o.kind !== 'window' && o.kind !== 'slider' && o.kind !== 'facade')) return g;
   const W = o.width,
     T = o.depth;
-  const top = o.kind === 'slider' ? SLIDE_HEAD + 0.22 : WIN_HEAD + 0.28;
+  const top = o.kind === 'window' ? WIN_HEAD + 0.28 : Math.min(2.6, SLIDE_HEAD + 0.22);
   const h = top - 0.03;
   const z = T / 2 + 0.13;
   const pw = Math.max(0.35, Math.min(0.75, W * 0.24));
@@ -208,5 +217,6 @@ function orient(g: THREE.Group, o: OpeningSpec) {
 export function glazing(kind: OpeningKind) {
   if (kind === 'window') return { y0: WIN_SILL, y1: WIN_HEAD };
   if (kind === 'slider') return { y0: 0.05, y1: SLIDE_HEAD };
+  if (kind === 'facade') return { y0: 0.05, y1: 2.5 };
   return null;
 }

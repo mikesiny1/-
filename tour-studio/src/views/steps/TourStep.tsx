@@ -8,11 +8,11 @@ import type { DesignBrief, RoomType } from '../../lib/types';
 import type { FrameInfo, Mode } from '../../three/engine';
 import type { StepProps } from '../ProjectView';
 
-export function Viewer3D({ p }: { p: StepProps['p'] }) {
+export function Viewer3D({ p, initialMode = 'tour' }: { p: StepProps['p']; initialMode?: Mode }) {
   const box = useRef<HTMLDivElement>(null);
   const { engine, ready, error } = useEngine(box, p);
   const [f, setF] = useState<FrameInfo | null>(null);
-  const [mode, setMode] = useState<Mode>('tour');
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [playing, setPlaying] = useState(false);
   const [hq, setHq] = useState(true);
   useEffect(() => {
@@ -33,6 +33,11 @@ export function Viewer3D({ p }: { p: StepProps['p'] }) {
       engine.onFrame = null;
     };
   }, [engine]);
+
+  useEffect(() => {
+    if (engine && ready && initialMode !== 'tour') engine.setMode(initialMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, ready]);
 
   const switchMode = (m: Mode) => {
     setMode(m);

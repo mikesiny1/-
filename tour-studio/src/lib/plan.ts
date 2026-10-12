@@ -33,7 +33,7 @@ export interface RoomRegion {
   touchesOutside: boolean;
 }
 
-export type OpeningKind = 'door' | 'passage' | 'window' | 'slider' | 'entry';
+export type OpeningKind = 'door' | 'passage' | 'window' | 'slider' | 'entry' | 'facade';
 
 export interface Opening {
   /** band covering the gap in the wall, working px */
@@ -44,6 +44,8 @@ export interface Opening {
   /** 'x' = gap runs along x (in a horizontal wall) */
   axis: 'x' | 'y';
   widthM: number;
+  /** a stretch of the outer envelope with no masonry: built as a glass wall */
+  facade?: boolean;
   /** room labels on each side (0 = none/outside); side A is the smaller coordinate */
   la: number;
   lb: number;
@@ -372,8 +374,20 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
   const pxPerM = s.pxPerM;
   const wall = extractWalls(r, s.threshold, s.minWall, s.fillOutline ? Math.round(s.fillOutline * pxPerM) : 0);
 
-  // Interior: everything enclosed by the outer walls once window/door gaps up to ~2.4m are bridged.
-  const { interior } = interiorOf(wall, w, h, Math.round(pxPerM * 1.3));
+  // Interior: everything enclosed by the outer walls once window/door gaps up to ~2.6m are bridged.
+  // Thin facade lines (glazing drawn in light grey) count too, but only close to the building, so
+  // sheet frames, dimension lines and legends far from the walls can't enclose anything.
+  const facadeInk = separators(r, 228);
+  const wb = bboxOf(wall, w, h);
+  const m = Math.round(pxPerM * 0.15);
+  const seal = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const inBox = x >= wb.x0 - m && x <= wb.x1 + m && y >= wb.y0 - m && y <= wb.y1 + m;
+      seal[i] = wall[i] || (facadeInk[i] && inBox) ? 1 : 0;
+    }
+  const interior = mainBody(interiorOf(seal, w, h, Math.round(pxPerM * 1.3)).interior, w, h, pxPerM);
 
   // Rooms: free space with doorways sealed. Thin lines (glazing, door leaves) also divide space.
   const doorR = Math.max(1, Math.round((s.doorGap * pxPerM) / 2));
@@ -500,6 +514,7 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
   const medianWall = allT.length ? allT[Math.floor(allT.length / 2)] : 0;
 
   const openings = detectOpenings(wall, interior, labels, sep || separators(r, Math.min(215, s.threshold + 60)), pxPerM, w, h);
+  openings.push(...facadeGlazing(wall, interior, labels, openings, facadeInk, pxPerM, w, h));
 
   return { w, h, scale: r.scale, wall, interior, labels, regions, hull: hb, pxPerM, medianWall, openings };
 }
@@ -586,6 +601,7 @@ function detectOpenings(wall: Uint8Array, interior: Uint8Array, labels: Int32Arr
 }
 
 export function classifyOpening(o: Opening, isBalcony: (label: number) => boolean): OpeningKind {
+  if (o.facade) return 'facade';
   const exterior = o.outA || o.outB;
   const toBalcony = isBalcony(o.la) !== isBalcony(o.lb);
   if (toBalcony) return o.widthM >= 1.3 ? 'slider' : 'door';
@@ -594,6 +610,118 @@ export function classifyOpening(o: Opening, isBalcony: (label: number) => boolea
     return o.widthM <= 1.4 ? 'entry' : 'window';
   }
   return o.widthM <= 1.25 ? 'door' : 'passage';
+}
+
+/** The flat itself: the largest enclosed body plus any sizeable part (e.g. a balcony), holes filled. */
+function mainBody(interior: Uint8Array, w: number, h: number, ppm: number) {
+  const { labels, sizes } = components(interior, w, h);
+  let best = 0;
+  for (let l = 1; l < sizes.length; l++) if (sizes[l] > sizes[best] || best === 0) best = l;
+  if (!best) return interior;
+  const minKeep = Math.max(sizes[best] * 0.08, 3 * ppm * ppm);
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = labels[i] && (labels[i] === best || sizes[labels[i]] >= minKeep) ? 1 : 0;
+  // fill holes (columns drawn hollow, shafts) so floors and ceilings are continuous
+  const outside = floodFrom(
+    out.map((v) => (v ? 0 : 1)),
+    w,
+    h,
+    borderSeeds(w, h),
+  );
+  for (let i = 0; i < out.length; i++) if (!outside[i]) out[i] = 1;
+  return out;
+}
+
+/**
+ * Stretches of the outer edge with no wall and no detected window: in sales plans these are
+ * glass facades drawn as faint lines. Returned as openings so the 3D model closes them in glass.
+ */
+function facadeGlazing(
+  wall: Uint8Array,
+  interior: Uint8Array,
+  labels: Int32Array,
+  known: Opening[],
+  ink: Uint8Array,
+  ppm: number,
+  w: number,
+  h: number,
+): Opening[] {
+  const band = Math.max(2, Math.round(ppm * 0.22));
+  const inner = erode(interior, w, h, band);
+  const wallNear = dilate(wall, w, h, Math.max(1, Math.round(ppm * 0.08)));
+  const edge = new Uint8Array(w * h);
+  for (let i = 0; i < edge.length; i++) edge[i] = interior[i] && !inner[i] && !wallNear[i] ? 1 : 0;
+  // remove known openings (windows, doors) so they are not doubled
+  const pad = Math.round(ppm * 0.15);
+  for (const o of known)
+    for (let y = Math.max(0, Math.floor(o.y0) - pad); y <= Math.min(h - 1, Math.ceil(o.y1) + pad); y++)
+      for (let x = Math.max(0, Math.floor(o.x0) - pad); x <= Math.min(w - 1, Math.ceil(o.x1) + pad); x++) edge[y * w + x] = 0;
+  const cell = Math.max(1, Math.round(ppm * 0.05));
+  const { grid, gw, gh } = downsample(edge, w, h, cell, 0.4);
+  const out: Opening[] = [];
+  const at = (x: number, y: number) => {
+    const xi = Math.round(x),
+      yi = Math.round(y);
+    if (xi < 0 || yi < 0 || xi >= w || yi >= h) return { l: 0, inside: false };
+    return { l: labels[yi * w + xi], inside: !!interior[yi * w + xi] };
+  };
+  for (const r of mergeRects(grid, gw, gh)) {
+    const x0 = r.x * cell,
+      y0 = r.y * cell,
+      x1 = (r.x + r.w) * cell,
+      y1 = (r.y + r.h) * cell;
+    const wx = x1 - x0,
+      wy = y1 - y0;
+    const axis: 'x' | 'y' = wx >= wy ? 'x' : 'y';
+    const len = Math.max(wx, wy),
+      thick = Math.min(wx, wy);
+    if (len < ppm * 0.8 || thick > ppm * 0.5) continue;
+    // only where a facade is actually drawn: faint lines along most of the stretch
+    let inked = 0;
+    const steps = Math.max(1, Math.round(len / 2));
+    for (let k = 0; k < steps; k++) {
+      const a = (axis === 'x' ? x0 : y0) + ((k + 0.5) / steps) * len;
+      let hit = 0;
+      for (let c = (axis === 'x' ? y0 : x0) - 2; c <= (axis === 'x' ? y1 : x1) + 2 && !hit; c++) {
+        const px = Math.round(axis === 'x' ? a : c),
+          py = Math.round(axis === 'x' ? c : a);
+        if (px >= 0 && py >= 0 && px < w && py < h && ink[py * w + px]) hit = 1;
+      }
+      inked += hit;
+    }
+    if (inked / steps < 0.5) continue;
+    const reach = thick / 2 + ppm * 0.3;
+    const cx = (x0 + x1) / 2,
+      cy = (y0 + y1) / 2;
+    const pa = axis === 'x' ? at(cx, cy - reach) : at(cx - reach, cy);
+    const pb = axis === 'x' ? at(cx, cy + reach) : at(cx + reach, cy);
+    if (pa.inside === pb.inside) continue;
+    // glass sits on the outer face of the band
+    const t = Math.max(thick, ppm * 0.12);
+    const o: Opening = {
+      x0,
+      y0,
+      x1,
+      y1,
+      axis,
+      widthM: len / ppm,
+      la: pa.l,
+      lb: pb.l,
+      outA: !pa.inside,
+      outB: !pb.inside,
+      glazed: true,
+      facade: true,
+    };
+    if (axis === 'x') {
+      o.y0 = pa.inside ? y1 - t : y0;
+      o.y1 = o.y0 + t;
+    } else {
+      o.x0 = pa.inside ? x1 - t : x0;
+      o.x1 = o.x0 + t;
+    }
+    out.push(o);
+  }
+  return out;
 }
 
 /**
@@ -648,15 +776,55 @@ function mergeIslands(labels: Int32Array, sizes: number[], wall: Uint8Array, w: 
         }
       }
     }
-    if (!total || strong / total > 0.5 || !neigh.size) continue;
-    const [best, cnt] = [...neigh.entries()].sort((a, b) => b[1] - a[1])[0];
-    const others = [...neigh.values()].reduce((a, b) => a + b, 0) - cnt;
-    if (others > cnt * 0.25) continue;
+    if (!total || strong / total > 0.5) continue;
+    let best = 0;
+    if (neigh.size) {
+      const [b0, cnt] = [...neigh.entries()].sort((a, b) => b[1] - a[1])[0];
+      const others = [...neigh.values()].reduce((a, b) => a + b, 0) - cnt;
+      if (others <= cnt * 0.25) best = b0;
+    }
+    // drawn furniture often nests (bed inside a bed outline): take the room that surrounds it
+    if (!best && strong / total < 0.2 && px.length < maxPx * 0.6) best = surrounding(labels, l, px, w, h, reach * 2);
+    if (!best) continue;
     for (const i of px) labels[i] = best;
-    sizes[best] += sizes[l];
+    sizes[best] = (sizes[best] || 0) + sizes[l];
     const bp = pixels.get(best);
     if (bp) bp.push(...px);
   }
+}
+
+/** Most common other label on a ring just outside the region's bounding box. */
+function surrounding(labels: Int32Array, l: number, px: number[], w: number, h: number, pad: number) {
+  let x0 = w,
+    y0 = h,
+    x1 = 0,
+    y1 = 0;
+  for (const i of px) {
+    const x = i % w,
+      y = (i - x) / w;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  const counts = new Map<number, number>();
+  const add = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    const v = labels[y * w + x];
+    if (v && v !== l) counts.set(v, (counts.get(v) || 0) + 1);
+  };
+  for (let x = x0 - pad; x <= x1 + pad; x += 2) {
+    add(x, y0 - pad);
+    add(x, y1 + pad);
+  }
+  for (let y = y0 - pad; y <= y1 + pad; y += 2) {
+    add(x0 - pad, y);
+    add(x1 + pad, y);
+  }
+  if (!counts.size) return 0;
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const total = sorted.reduce((a, b) => a + b[1], 0);
+  return sorted[0][1] / total > 0.6 ? sorted[0][0] : 0;
 }
 
 /** For each wall pixel next to free space, how thick is the wall going outward. Stored on the free pixel. */
@@ -709,13 +877,14 @@ function exteriorWall(labels: Int32Array, l: number, wall: Uint8Array, interior:
         cx += dx;
         cy += dy;
       }
-      if (!n || n >= 80) continue;
+      if (!n || n >= 40) continue;
       if (cx < 0 || cy < 0 || cx >= w || cy >= h || !interior[cy * w + cx]) vals.push(n);
     }
   }
   if (!vals.length) return 0;
   vals.sort((a, b) => a - b);
-  return vals[Math.floor(vals.length / 2)];
+  // lower quartile: crossings that run along a wall are long, true crossings are short
+  return vals[Math.floor(vals.length / 4)];
 }
 
 function regionWallThickness(labels: Int32Array, l: number, t: Uint16Array, w: number, h: number) {

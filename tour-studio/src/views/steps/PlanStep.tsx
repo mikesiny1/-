@@ -6,6 +6,7 @@ import { autoTunePlan, getRaster, modelFor } from '../../lib/project';
 import { ROOM_TYPES, roomName } from '../../lib/styles';
 import type { PlanRoom, PlanSettings, RoomType } from '../../lib/types';
 import type { StepProps } from '../ProjectView';
+import { Viewer3D } from './TourStep';
 
 const OPENING_COLORS: Record<OpeningKind, string> = {
   door: '#4f8a4a',
@@ -13,8 +14,9 @@ const OPENING_COLORS: Record<OpeningKind, string> = {
   window: '#3f7fc4',
   slider: '#2aa6a6',
   entry: '#b0478f',
+  facade: '#7fb4d6',
 };
-const OPENING_NAMES: Record<OpeningKind, string> = { door: 'דלת', passage: 'מעבר', window: 'חלון', slider: 'ויטרינה', entry: 'כניסה' };
+const OPENING_NAMES: Record<OpeningKind, string> = { door: 'דלת', passage: 'מעבר', window: 'חלון', slider: 'ויטרינה', entry: 'כניסה', facade: 'חזית זכוכית' };
 
 const ROOM_COLORS = ['#c9a36b', '#7f9a7a', '#8aa0b8', '#b88a8a', '#a59ac2', '#c2b37a', '#7fb0ad', '#b9927a', '#9aa37f', '#c7a0b8'];
 
@@ -32,6 +34,7 @@ export default function PlanStep({ p, update, next }: StepProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const toast = useToast();
   const [zoom, setZoom] = useState(1);
+  const [show3d, setShow3d] = useState(false);
   const [tuning, setTuning] = useState<number | null>(null);
   const history = useRef<PlanSettings[]>([]);
   const s = p.plan;
@@ -328,6 +331,17 @@ export default function PlanStep({ p, update, next }: StepProps) {
               ))}
           </div>
           </div>
+          <div className="row" style={{ marginTop: 14 }}>
+            <button className={'btn sm ' + (show3d ? '' : 'ghost')} onClick={() => setShow3d(!show3d)}>
+              {show3d ? 'הסתרת תצוגת התלת-ממד' : 'בדיקה בתלת-ממד'}
+            </button>
+            <span className="small muted">כך התוכנית נבנית כרגע. כל תיקון בתוכנית מתעדכן כאן.</span>
+          </div>
+          {show3d && (
+            <div style={{ marginTop: 10 }}>
+              <Viewer3D p={p} initialMode="doll" />
+            </div>
+          )}
           <div className="planlegend">
             <span>
               <i style={{ background: '#1e1c19' }} /> קיר
@@ -430,7 +444,7 @@ export default function PlanStep({ p, update, next }: StepProps) {
               <div className="small muted">
                 אם הקירות בתוכנית אפורים ולא מזוהים — הגדילו את הרגישות.
                 <br />
-                קנה מידה: {s.pxPerM.toFixed(1)} פיקסלים למטר {s.calibrated ? '· מכויל ידנית' : '· הוערך לפי שטח הדירה'}
+                קנה מידה: {s.pxPerM.toFixed(1)} פיקסלים למטר {s.calibrated ? '· מכויל ידנית' : s.scaleSource === 'doors' ? '· נקבע לפי רוחב הדלתות בתוכנית (88 ס״מ)' : s.scaleSource === 'area' ? '· הוערך לפי שטח הדירה — מומלץ לכייל' : '· הערכה כללית — מומלץ לכייל לפי קו מידה'}
               </div>
             </div>
           </section>

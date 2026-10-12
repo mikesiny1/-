@@ -56,6 +56,17 @@ export function modelFor(blobId: string, r: Raster, s: PlanSettings): PlanModel 
   return model;
 }
 
+/** Median clear width of interior doors (both sides inside, 0.55–1.3m at the current scale), as px/m. */
+export function scaleFromDoors(m: PlanModel) {
+  const widths = m.openings
+    .filter((o) => !o.facade && !o.outA && !o.outB)
+    .map((o) => (o.axis === 'x' ? o.x1 - o.x0 : o.y1 - o.y0))
+    .filter((px) => px / m.pxPerM > 0.5 && px / m.pxPerM < 1.4)
+    .sort((a, b) => a - b);
+  if (widths.length < 3) return 0;
+  return widths[Math.floor(widths.length / 2)] / 0.88;
+}
+
 export function scorePlan(m: PlanModel, sqm: number, declaredRooms: number) {
   const rooms = [...m.regions.values()].filter((g) => g.areaM2 >= 1.5 && g.areaM2 <= 70);
   if (rooms.length <= 1) return -100 + rooms.length;
@@ -98,7 +109,16 @@ export async function autoTunePlan(r: Raster, sqm: number, declaredRooms: number
     s.pxPerM = estimateScale(r, walls, sqm);
     s.minWall = Math.max(3, Math.min(minWall0, Math.round(s.pxPerM * 0.08)));
     s.fillOutline = f ? f / s.pxPerM : 0;
-    const model = analyzePlan(r, s);
+    let model = analyzePlan(r, s);
+    // interior doors are a near-universal 85-90cm: when enough are found they fix the scale
+    const doorScale = scaleFromDoors(model);
+    if (doorScale && Math.abs(doorScale / s.pxPerM - 1) > 0.04 && doorScale / s.pxPerM > 0.55 && doorScale / s.pxPerM < 1.8) {
+      s.pxPerM = doorScale;
+      s.scaleSource = 'doors';
+      s.minWall = Math.max(3, Math.min(minWall0, Math.round(s.pxPerM * 0.08)));
+      s.fillOutline = f ? f / s.pxPerM : 0;
+      model = analyzePlan(r, s);
+    } else s.scaleSource = doorScale ? 'doors' : sqm > 10 ? 'area' : 'guess';
     const score = scorePlan(model, sqm, declaredRooms) - (f ? 1.5 : 0) - Math.abs(t - base) / 200;
     if (!best || score > best.score) best = { s, score, model };
   }
