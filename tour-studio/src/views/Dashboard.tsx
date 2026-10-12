@@ -26,6 +26,7 @@ export default function Dashboard() {
   const [items, setItems] = useState<Project[] | null>(null);
   const [filter, setFilter] = useState<ProjectStatus | 'all'>('all');
   const [busy, setBusy] = useState(false);
+  const [armed, setArmed] = useState<string | null>(null);
   const toast = useToast();
 
   const load = () => listProjects().then(setItems);
@@ -166,16 +167,22 @@ export default function Dashboard() {
                 <span className="date">{fmtDate(p.updatedAt)}</span>
                 <button
                   className="x"
-                  title="מחיקה"
+                  title={armed === p.id ? 'לחצו שוב כדי למחוק' : 'מחיקה'}
+                  style={armed === p.id ? { color: 'var(--danger)', fontSize: 13, whiteSpace: 'nowrap' } : undefined}
                   onClick={async (e) => {
                     e.stopPropagation();
-                    if (!confirm('למחוק את הנכס וכל החומרים שלו?')) return;
+                    if (armed !== p.id) {
+                      setArmed(p.id);
+                      setTimeout(() => setArmed((a) => (a === p.id ? null : a)), 3500);
+                      return;
+                    }
+                    setArmed(null);
                     await deleteProject(p);
                     toast('הנכס נמחק');
                     load();
                   }}
                 >
-                  <Icon name="trash" />
+                  {armed === p.id ? 'למחוק?' : <Icon name="trash" />}
                 </button>
               </div>
             ))}
