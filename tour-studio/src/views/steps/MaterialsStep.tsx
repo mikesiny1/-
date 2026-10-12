@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Drop, Icon, useToast } from '../../components/ui';
 import { blobUrl, deleteBlob, putBlob, uid } from '../../lib/db';
-import { getRaster, initialPlan } from '../../lib/project';
+import { autoTunePlan, getRaster } from '../../lib/project';
+import { pdfToImage } from '../../lib/pdf';
 import type { PhotoEntry, RoomType } from '../../lib/types';
 import type { StepProps } from '../ProjectView';
 
@@ -24,6 +25,7 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
   const [planUrl, setPlanUrl] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState('');
+  const [progress, setProgress] = useState('');
   const toast = useToast();
 
   useEffect(() => {
@@ -36,9 +38,17 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
   const onPlan = async ([f]: File[]) => {
     setBusy('plan');
     try {
-      const id = await putBlob(await shrink(f, 2000));
+      let src: Blob = f;
+      if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
+        setProgress('ממיר PDF לתמונה…');
+        src = await pdfToImage(f);
+      }
+      const id = await putBlob(src instanceof File ? await shrink(src, 2000) : src);
       const r = await getRaster(id);
-      const plan = r ? initialPlan(r, p.details.sqm, p.details.rooms) : null;
+      const plan = r
+        ? await autoTunePlan(r, p.details.sqm, p.details.rooms, (k) => setProgress(`קורא את התוכנית · בודק הגדרות קריאה ${Math.round(k * 100)}%`))
+        : null;
+      setProgress('');
       if (p.planBlobId) deleteBlob(p.planBlobId);
       update((x) => ({ ...x, planBlobId: id, plan, status: x.status === 'draft' ? 'in_progress' : x.status }));
       toast(plan?.rooms.length ? `זוהו ${plan.rooms.length} חללים בתוכנית` : 'התוכנית נטענה — נעבור עליה בשלב הקריאה');
@@ -76,10 +86,10 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
       <div className="materials">
         <section>
           <Drop
-            accept="image/*"
+            accept="image/*,application/pdf"
             icon="plan"
             title={p.planBlobId ? 'החלפת תוכנית' : 'תוכנית דירה'}
-            text={busy === 'plan' ? 'קורא את התוכנית…' : 'JPG או PNG, תוכנית מכר או סקיצה בשחור-לבן'}
+            text={busy === 'plan' ? progress || 'קורא את התוכנית…' : 'PDF, JPG או PNG — תוכנית מכר, תוכנית אדריכל או סקיצה'}
             cta="בחירת קובץ"
             onFiles={onPlan}
           />
@@ -89,7 +99,7 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
             </div>
           )}
           <p className="small muted" style={{ marginTop: 12 }}>
-            עובד הכי טוב עם תוכנית שהקירות בה מסומנים בקו עבה וכהה. PDF — יש לייצא קודם לתמונה.
+            המערכת בודקת כמה דרכי קריאה ובוחרת את המדויקת. קירות מלאים, קירות בקו כפול וקירות אפורים נתמכים. מקובץ PDF נקרא העמוד הראשון.
           </p>
         </section>
 

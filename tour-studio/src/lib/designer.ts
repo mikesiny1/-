@@ -3,10 +3,10 @@ import { FURNITURE_NAMES, roomName, styleById } from './styles';
 
 /** What a designer would put in each room type, ordered by importance. */
 export const ROOM_RECIPE: Record<RoomType, FurnitureKind[]> = {
-  living: ['sofa', 'rug', 'coffeeTable', 'tvUnit', 'armchair', 'floorLamp', 'plant'],
+  living: ['sofa', 'rug', 'coffeeTable', 'tvUnit', 'armchair', 'floorLamp', 'plant', 'art'],
   dining: ['diningTable', 'sideboard', 'plant'],
   kitchen: ['diningTable'],
-  master: ['bed', 'nightstand', 'wardrobe', 'rug', 'plant'],
+  master: ['bed', 'nightstand', 'wardrobe', 'rug', 'plant', 'art'],
   bedroom: ['bed', 'nightstand', 'wardrobe', 'rug'],
   kids: ['singleBed', 'desk', 'shelf', 'rug'],
   office: ['desk', 'shelf', 'armchair', 'plant'],
@@ -58,6 +58,7 @@ const PRICE: Record<FurnitureKind, [number, number]> = {
   singleBed: [1200, 3500],
   bistroSet: [900, 3000],
   shelf: [500, 2000],
+  art: [300, 1800],
 };
 
 const BUDGET_FACTOR: Record<Budget, number> = { smart: 0, mid: 0.45, premium: 1 };

@@ -33,7 +33,27 @@ export interface RoomRegion {
   touchesOutside: boolean;
 }
 
+export type OpeningKind = 'door' | 'passage' | 'window' | 'slider' | 'entry';
+
+export interface Opening {
+  /** band covering the gap in the wall, working px */
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** 'x' = gap runs along x (in a horizontal wall) */
+  axis: 'x' | 'y';
+  widthM: number;
+  /** room labels on each side (0 = none/outside); side A is the smaller coordinate */
+  la: number;
+  lb: number;
+  outA: boolean;
+  outB: boolean;
+  glazed: boolean;
+}
+
 export interface PlanModel {
+  openings: Opening[];
   w: number;
   h: number;
   scale: number; // working px per source px
@@ -199,10 +219,12 @@ export function autoThreshold(r: Raster) {
 
 // ---------------------------------------------------------------- analysis
 
-export function extractWalls(r: Raster, threshold: number, minWall: number) {
+export function extractWalls(r: Raster, threshold: number, minWall: number, fillOutline = 0) {
   const { w, h, gray } = r;
-  const ink = new Uint8Array(w * h);
+  let ink = new Uint8Array(w * h);
   for (let i = 0; i < ink.length; i++) ink[i] = gray[i] < threshold ? 1 : 0;
+  // walls drawn as two parallel lines (unfilled): close the gap between them first
+  if (fillOutline > 0) ink = close(ink, w, h, fillOutline);
   const rad = Math.max(1, Math.floor(minWall / 2));
   const opened = dilate(erode(ink, w, h, rad), w, h, rad);
   // keep only parts of the original ink (opening may slightly bloat corners)
@@ -347,8 +369,8 @@ function maxRect(grid: Uint8Array, gw: number, gh: number): Rect | null {
 
 export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
   const { w, h } = r;
-  const wall = extractWalls(r, s.threshold, s.minWall);
   const pxPerM = s.pxPerM;
+  const wall = extractWalls(r, s.threshold, s.minWall, s.fillOutline ? Math.round(s.fillOutline * pxPerM) : 0);
 
   // Interior: everything enclosed by the outer walls once window/door gaps up to ~2.4m are bridged.
   const { interior } = interiorOf(wall, w, h, Math.round(pxPerM * 1.3));
@@ -477,7 +499,101 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
   allT.sort((a, b) => a - b);
   const medianWall = allT.length ? allT[Math.floor(allT.length / 2)] : 0;
 
-  return { w, h, scale: r.scale, wall, interior, labels, regions, hull: hb, pxPerM, medianWall };
+  const openings = detectOpenings(wall, interior, labels, sep || separators(r, Math.min(215, s.threshold + 60)), pxPerM, w, h);
+
+  return { w, h, scale: r.scale, wall, interior, labels, regions, hull: hb, pxPerM, medianWall, openings };
+}
+
+/**
+ * Finds gaps between collinear wall segments: doors, passages, windows and balcony sliders.
+ * Works on the wall mask decomposed into rectangles, pairing each segment end with the next
+ * segment of the same thickness along the same line.
+ */
+function detectOpenings(wall: Uint8Array, interior: Uint8Array, labels: Int32Array, ink: Uint8Array, ppm: number, w: number, h: number): Opening[] {
+  const cell = Math.max(1, Math.round(ppm * 0.05));
+  const { grid, gw, gh } = downsample(wall, w, h, cell, 0.45);
+  const rects = mergeRects(grid, gw, gh).map((b) => ({ x0: b.x * cell, y0: b.y * cell, x1: (b.x + b.w) * cell, y1: (b.y + b.h) * cell }));
+  const maxT = ppm * 0.5;
+  const minGap = ppm * 0.55,
+    maxGap = ppm * 5.5;
+  const out: Opening[] = [];
+  const at = (x: number, y: number) => {
+    const xi = Math.round(x),
+      yi = Math.round(y);
+    if (xi < 0 || yi < 0 || xi >= w || yi >= h) return { l: 0, inside: false };
+    const i = yi * w + xi;
+    return { l: labels[i], inside: !!interior[i] };
+  };
+  for (const axis of ['x', 'y'] as const) {
+    // project to (along, across) coordinates
+    const segs = rects
+      .map((r) => (axis === 'x' ? { a0: r.x0, a1: r.x1, c0: r.y0, c1: r.y1 } : { a0: r.y0, a1: r.y1, c0: r.x0, c1: r.x1 }))
+      .filter((r) => r.c1 - r.c0 <= maxT && r.a1 - r.a0 >= (r.c1 - r.c0) * 0.6);
+    segs.sort((p, q) => p.a0 - q.a0);
+    for (const A of segs) {
+      const tA = A.c1 - A.c0;
+      let best: (typeof segs)[number] | null = null;
+      for (const B of segs) {
+        if (B.a0 <= A.a1 + minGap * 0.5 || B.a0 - A.a1 > maxGap) continue;
+        const tB = B.c1 - B.c0;
+        const ov = Math.min(A.c1, B.c1) - Math.max(A.c0, B.c0);
+        if (ov < 0.6 * Math.min(tA, tB) || Math.abs(tA - tB) > Math.max(tA, tB) * 0.6) continue;
+        if (!best || B.a0 < best.a0) best = B;
+      }
+      if (!best) continue;
+      const g0 = A.a1,
+        g1 = best.a0;
+      if (g1 - g0 < minGap) continue;
+      const c0 = Math.max(A.c0, best.c0),
+        c1 = Math.min(A.c1, best.c1);
+      // the band must be empty of walls, and no wall may cross it
+      let wallPx = 0,
+        inkPx = 0,
+        n = 0;
+      for (let a = Math.ceil(g0) + 1; a < g1 - 1; a++)
+        for (let c = Math.ceil(c0); c < c1; c++) {
+          const x = axis === 'x' ? a : c,
+            y = axis === 'x' ? c : a;
+          if (x < 0 || y < 0 || x >= w || y >= h) continue;
+          n++;
+          wallPx += wall[y * w + x];
+          inkPx += ink[y * w + x];
+        }
+      if (!n || wallPx / n > 0.12) continue;
+      const mid = (g0 + g1) / 2;
+      const reach = (c1 - c0) / 2 + ppm * 0.35;
+      const cm = (c0 + c1) / 2;
+      const pa = axis === 'x' ? at(mid, cm - reach) : at(cm - reach, mid);
+      const pb = axis === 'x' ? at(mid, cm + reach) : at(cm + reach, mid);
+      if (!pa.inside && !pb.inside) continue;
+      // don't pair walls across an open room: both sides must be close to the band
+      out.push({
+        x0: axis === 'x' ? g0 : c0,
+        x1: axis === 'x' ? g1 : c1,
+        y0: axis === 'x' ? c0 : g0,
+        y1: axis === 'x' ? c1 : g1,
+        axis,
+        widthM: (g1 - g0) / ppm,
+        la: pa.l,
+        lb: pb.l,
+        outA: !pa.inside,
+        outB: !pb.inside,
+        glazed: inkPx / n > 0.03,
+      });
+    }
+  }
+  return out;
+}
+
+export function classifyOpening(o: Opening, isBalcony: (label: number) => boolean): OpeningKind {
+  const exterior = o.outA || o.outB;
+  const toBalcony = isBalcony(o.la) !== isBalcony(o.lb);
+  if (toBalcony) return o.widthM >= 1.3 ? 'slider' : 'door';
+  if (exterior) {
+    if (o.glazed) return o.widthM >= 2.2 ? 'slider' : 'window';
+    return o.widthM <= 1.4 ? 'entry' : 'window';
+  }
+  return o.widthM <= 1.25 ? 'door' : 'passage';
 }
 
 /**

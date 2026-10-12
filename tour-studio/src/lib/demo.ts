@@ -1,5 +1,5 @@
 /** Draws an architect-style sample plan (5 rooms, ~105 m²) so the studio can be tried without files. */
-export function drawDemoPlan(): HTMLCanvasElement {
+export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' = 'solid'): HTMLCanvasElement {
   const S = 60; // px per metre
   const M = 1.4; // margin in metres
   const c = document.createElement('canvas');
@@ -11,13 +11,22 @@ export function drawDemoPlan(): HTMLCanvasElement {
   const X = (m: number) => (m + M) * S;
   const Y = (m: number) => (m + M) * S;
 
-  const ink = '#1b1b1b';
+  const ink = variant === 'gray' ? '#8f8f8f' : '#1b1b1b';
   // wall from (x0,y0) to (x1,y1) along an axis, with thickness t metres
   const wall = (x0: number, y0: number, x1: number, y1: number, t: number) => {
-    g.fillStyle = ink;
     const h = t / 2;
-    if (y0 === y1) g.fillRect(X(Math.min(x0, x1) - h), Y(y0 - h), (Math.abs(x1 - x0) + t) * S, t * S);
-    else g.fillRect(X(x0 - h), Y(Math.min(y0, y1) - h), t * S, (Math.abs(y1 - y0) + t) * S);
+    const r =
+      y0 === y1
+        ? [X(Math.min(x0, x1) - h), Y(y0 - h), (Math.abs(x1 - x0) + t) * S, t * S]
+        : [X(x0 - h), Y(Math.min(y0, y1) - h), t * S, (Math.abs(y1 - y0) + t) * S];
+    if (variant === 'outline') {
+      g.strokeStyle = '#1b1b1b';
+      g.lineWidth = 2;
+      g.strokeRect(r[0] + 1, r[1] + 1, r[2] - 2, r[3] - 2);
+    } else {
+      g.fillStyle = ink;
+      g.fillRect(r[0], r[1], r[2], r[3]);
+    }
   };
   // horizontal wall with openings [[from,to],...]
   const hwall = (y: number, x0: number, x1: number, t: number, gaps: [number, number][] = []) => {

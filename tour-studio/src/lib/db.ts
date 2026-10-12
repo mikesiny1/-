@@ -101,3 +101,17 @@ export async function getBrand(): Promise<Brand> {
 }
 
 export const saveBrand = (b: Brand) => tx('meta', 'readwrite', (s) => s.put(b, 'brand'));
+
+export interface LibraryEntry {
+  kind: import('./types').FurnitureKind;
+  blobId: string;
+  name: string;
+  rotate: number;
+}
+
+export async function getLibrary(): Promise<LibraryEntry[]> {
+  const v = await tx<LibraryEntry[] | undefined>('meta', 'readonly', (s) => s.get('library'));
+  return v || [];
+}
+
+export const saveLibrary = (l: LibraryEntry[]) => tx('meta', 'readwrite', (s) => s.put(l, 'library'));

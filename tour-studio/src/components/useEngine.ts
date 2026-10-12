@@ -2,6 +2,7 @@ import { useEffect, useState, type RefObject } from 'react';
 import { getRaster, modelFor } from '../lib/project';
 import type { Project } from '../lib/types';
 import { TourEngine } from '../three/engine';
+import { loadLibrary } from '../three/library';
 
 /** Creates a TourEngine inside `ref` and keeps it in sync with the project. */
 export function useEngine(ref: RefObject<HTMLDivElement>, p: Project, enabled = true) {
@@ -19,6 +20,7 @@ export function useEngine(ref: RefObject<HTMLDivElement>, p: Project, enabled = 
       return;
     }
     setEngine(e);
+    loadLibrary().then((lib) => lib.size && e.setLibrary(lib));
     return () => {
       e.dispose();
       setEngine(null);

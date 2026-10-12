@@ -4,7 +4,9 @@ import type { Brand } from './lib/types';
 import { ToastHost } from './components/ui';
 import Dashboard from './views/Dashboard';
 import Settings from './views/Settings';
+import Library from './views/Library';
 import ProjectView from './views/ProjectView';
+import Present from './views/Present';
 
 function useHash() {
   const [hash, setHash] = useState(location.hash.slice(1) || '/');
@@ -45,9 +47,19 @@ export default function App() {
   let view;
   if (parts[0] === 'p' && parts[1]) view = <ProjectView id={parts[1]} step={parts[2] || 'details'} />;
   else if (parts[0] === 'settings') view = <Settings />;
+  else if (parts[0] === 'library') view = <Library />;
   else view = <Dashboard />;
 
-  const section = parts[0] === 'settings' ? 'settings' : 'props';
+  if (parts[0] === 'present' && parts[1])
+    return (
+      <Ctx.Provider value={{ brand, setBrand }}>
+        <ToastHost>
+          <Present id={parts[1]} />
+        </ToastHost>
+      </Ctx.Provider>
+    );
+
+  const section = parts[0] === 'settings' ? 'settings' : parts[0] === 'library' ? 'library' : 'props';
 
   return (
     <Ctx.Provider value={{ brand, setBrand }}>
@@ -61,6 +73,9 @@ export default function App() {
             <nav className="topnav">
               <a href="#/" className={section === 'props' ? 'on' : ''}>
                 נכסים
+              </a>
+              <a href="#/library" className={section === 'library' ? 'on' : ''}>
+                ספריית ריהוט
               </a>
               <a href="#/settings" className={section === 'settings' ? 'on' : ''}>
                 פרופיל משרד

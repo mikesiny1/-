@@ -1,11 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, Range, useToast } from '../../components/ui';
 import { loadImage, uid } from '../../lib/db';
-import { autoRooms, regionAt, roomRectAt, type PlanModel, type Raster } from '../../lib/plan';
-import { getRaster, modelFor } from '../../lib/project';
+import { autoRooms, classifyOpening, regionAt, roomRectAt, type OpeningKind, type PlanModel, type Raster } from '../../lib/plan';
+import { autoTunePlan, getRaster, modelFor } from '../../lib/project';
 import { ROOM_TYPES, roomName } from '../../lib/styles';
 import type { PlanRoom, PlanSettings, RoomType } from '../../lib/types';
 import type { StepProps } from '../ProjectView';
+
+const OPENING_COLORS: Record<OpeningKind, string> = {
+  door: '#4f8a4a',
+  passage: '#c2a14a',
+  window: '#3f7fc4',
+  slider: '#2aa6a6',
+  entry: '#b0478f',
+};
+const OPENING_NAMES: Record<OpeningKind, string> = { door: 'דלת', passage: 'מעבר', window: 'חלון', slider: 'ויטרינה', entry: 'כניסה' };
 
 const ROOM_COLORS = ['#c9a36b', '#7f9a7a', '#8aa0b8', '#b88a8a', '#a59ac2', '#c2b37a', '#7fb0ad', '#b9927a', '#9aa37f', '#c7a0b8'];
 
@@ -22,6 +31,9 @@ export default function PlanStep({ p, update, next }: StepProps) {
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const toast = useToast();
+  const [zoom, setZoom] = useState(1);
+  const [tuning, setTuning] = useState<number | null>(null);
+  const history = useRef<PlanSettings[]>([]);
   const s = p.plan;
 
   useEffect(() => {
@@ -39,7 +51,34 @@ export default function PlanStep({ p, update, next }: StepProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [raster, analysisKey]);
 
-  const setPlan = (fn: (s: PlanSettings) => PlanSettings) => update((x) => (x.plan ? { ...x, plan: fn(x.plan) } : x));
+  const setPlan = (fn: (s: PlanSettings) => PlanSettings) =>
+    update((x) => {
+      if (!x.plan) return x;
+      history.current = [...history.current.slice(-29), x.plan];
+      return { ...x, plan: fn(x.plan) };
+    });
+  const undo = () => {
+    const prev = history.current.pop();
+    if (prev) update((x) => ({ ...x, plan: prev }));
+  };
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !(e.target as HTMLElement).closest('input,textarea,select')) {
+        e.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener('keydown', on);
+    return () => window.removeEventListener('keydown', on);
+  });
+  const retune = async () => {
+    if (!raster) return;
+    setTuning(0);
+    const next = await autoTunePlan(raster, p.details.sqm, p.details.rooms, setTuning);
+    setTuning(null);
+    setPlan(() => next);
+    toast(`הקריאה עודכנה · ${next.rooms.length} חללים`);
+  };
 
   // label → room index (for colours/areas)
   const roomRegions = useMemo(() => {
@@ -92,6 +131,21 @@ export default function PlanStep({ p, update, next }: StepProps) {
       }
     }
     g.putImageData(data, 0, 0);
+    // doors and windows the reader found
+    const balconyLabels = new Set<number>();
+    s.rooms.forEach((r) => {
+      if (r.type !== 'balcony') return;
+      const reg = roomRegions.get(r.id);
+      if (reg) balconyLabels.add(reg.label);
+    });
+    g.lineWidth = Math.max(2, raster.w / 350);
+    for (const o of model.openings) {
+      const k = classifyOpening(o, (l) => balconyLabels.has(l));
+      g.fillStyle = OPENING_COLORS[k];
+      g.globalAlpha = 0.85;
+      g.fillRect(o.x0, o.y0, o.x1 - o.x0, o.y1 - o.y0);
+      g.globalAlpha = 1;
+    }
     // calibration line
     if (cal.a) {
       g.strokeStyle = '#8a5a3b';
@@ -219,7 +273,18 @@ export default function PlanStep({ p, update, next }: StepProps) {
                 ))}
               </select>
             )}
-            <span className="small muted">
+            <span className="spacer" />
+            <div className="seg" title="זום">
+              <button onClick={() => setZoom((z) => Math.max(1, z - 0.5))} disabled={zoom <= 1}>
+                −
+              </button>
+              <button onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
+              <button onClick={() => setZoom((z) => Math.min(3, z + 0.5))}>+</button>
+            </div>
+            <button className="btn ghost sm" onClick={undo} title="ביטול פעולה (Ctrl+Z)">
+              ביטול
+            </button>
+            <span className="small muted" style={{ flexBasis: '100%' }}>
               {mode === 'add' && 'לחצו בתוך החדר, או גררו מלבן על שטח החדר'}
               {mode === 'calibrate' && !cal.b && 'לחצו על שתי נקודות שהמרחק ביניהן ידוע (למשל קו מידה)'}
             </span>
@@ -234,7 +299,14 @@ export default function PlanStep({ p, update, next }: StepProps) {
               </button>
             </div>
           )}
-          <div className={'planstage' + (mode !== 'view' ? ' adding' : '')} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} style={{ touchAction: mode === 'view' ? 'auto' : 'none' }}>
+          <div className="planscroll">
+          <div
+            className={'planstage' + (mode !== 'view' ? ' adding' : '')}
+            onPointerDown={onDown}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            style={{ touchAction: mode === 'view' ? 'auto' : 'none', width: `${zoom * 100}%` }}
+          >
             <canvas ref={canvas} />
             {drag && raster && (
               <span
@@ -254,6 +326,19 @@ export default function PlanStep({ p, update, next }: StepProps) {
                   {r.name || roomName(r.type)}
                 </span>
               ))}
+          </div>
+          </div>
+          <div className="planlegend">
+            <span>
+              <i style={{ background: '#1e1c19' }} /> קיר
+            </span>
+            {(Object.keys(OPENING_NAMES) as OpeningKind[]).map((k) => (
+              <span key={k}>
+                <i style={{ background: OPENING_COLORS[k] }} /> {OPENING_NAMES[k]}
+              </span>
+            ))}
+            <span className="spacer" />
+            {model && <span>{model.openings.length} פתחים זוהו</span>}
           </div>
         </div>
 
@@ -318,6 +403,10 @@ export default function PlanStep({ p, update, next }: StepProps) {
           <section className="panel">
             <header>
               <h3>כיוונון קריאה</h3>
+              <span className="spacer" />
+              <button className="btn quiet sm" onClick={retune} disabled={tuning !== null}>
+                <Icon name="wand" /> {tuning !== null ? `בודק… ${Math.round(tuning * 100)}%` : 'קריאה אוטומטית'}
+              </button>
             </header>
             <div className="in stack">
               <Range label="רגישות לקווים כהים" value={s.threshold} min={40} max={220} onChange={(v) => setPlan((pl) => ({ ...pl, threshold: v }))} />

@@ -1,66 +1,146 @@
 /**
  * Procedural furniture. Every piece is built in metres, centred on its footprint,
  * standing on y=0 and facing +Z (the "front" a person would sit or look at).
+ *
+ * Realism comes from three things: soft, filled upholstery geometry (softBox with puff),
+ * physically based materials (fabric sheen and weave normals, wood grain, ceramic gloss),
+ * and styling objects a designer would add (throws, cushions, books, vases, art).
  */
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { StyleDef } from '../lib/styles';
 import type { FurnitureKind } from '../lib/types';
-import { rugTexture, weaveTexture, woodTexture } from './textures';
+import { rugTexture } from './textures';
+import { artTexture, leafGeometry, softBox, turned, weaveNormal, woodGrain } from './shapes';
 
 export interface Mats {
-  wood: THREE.MeshStandardMaterial;
-  woodDark: THREE.MeshStandardMaterial;
-  fabric: THREE.MeshStandardMaterial;
-  fabricAlt: THREE.MeshStandardMaterial;
-  accent: THREE.MeshStandardMaterial;
+  wood: THREE.MeshPhysicalMaterial;
+  woodDark: THREE.MeshPhysicalMaterial;
+  fabric: THREE.MeshPhysicalMaterial;
+  fabricAlt: THREE.MeshPhysicalMaterial;
+  accent: THREE.MeshPhysicalMaterial;
+  linen: THREE.MeshPhysicalMaterial;
+  bedding: THREE.MeshPhysicalMaterial;
   metal: THREE.MeshStandardMaterial;
-  stone: THREE.MeshStandardMaterial;
-  linen: THREE.MeshStandardMaterial;
+  brass: THREE.MeshStandardMaterial;
+  stone: THREE.MeshPhysicalMaterial;
+  ceramic: THREE.MeshPhysicalMaterial;
+  ceramicDark: THREE.MeshPhysicalMaterial;
   leaf: THREE.MeshStandardMaterial;
   leafDark: THREE.MeshStandardMaterial;
-  pot: THREE.MeshStandardMaterial;
+  stem: THREE.MeshStandardMaterial;
+  soil: THREE.MeshStandardMaterial;
+  pot: THREE.MeshPhysicalMaterial;
   black: THREE.MeshStandardMaterial;
-  screen: THREE.MeshStandardMaterial;
+  screen: THREE.MeshPhysicalMaterial;
   lampShade: THREE.MeshStandardMaterial;
+  bulb: THREE.MeshStandardMaterial;
   glass: THREE.MeshPhysicalMaterial;
-  white: THREE.MeshStandardMaterial;
+  white: THREE.MeshPhysicalMaterial;
+  lacquer: THREE.MeshPhysicalMaterial;
   rug: THREE.MeshStandardMaterial;
   books: THREE.MeshStandardMaterial[];
+  art: THREE.MeshStandardMaterial[];
+  frame: THREE.MeshStandardMaterial;
+  rattan: THREE.MeshPhysicalMaterial;
+}
+
+function fabricMat(color: string, kind: 'linen' | 'boucle' | 'velvet' | 'leather') {
+  const c = new THREE.Color(color);
+  if (kind === 'leather')
+    return new THREE.MeshPhysicalMaterial({
+      color: c,
+      roughness: 0.48,
+      clearcoat: 0.25,
+      clearcoatRoughness: 0.55,
+      normalMap: weaveNormal('leather'),
+      normalScale: new THREE.Vector2(0.35, 0.35),
+    });
+  return new THREE.MeshPhysicalMaterial({
+    color: c,
+    roughness: kind === 'velvet' ? 0.75 : 0.92,
+    sheen: kind === 'velvet' ? 1 : 0.6,
+    sheenRoughness: kind === 'velvet' ? 0.35 : 0.8,
+    sheenColor: c.clone().offsetHSL(0, -0.05, 0.25),
+    normalMap: weaveNormal(kind),
+    normalScale: new THREE.Vector2(kind === 'boucle' ? 0.9 : 0.45, kind === 'boucle' ? 0.9 : 0.45),
+  });
+}
+
+function woodMat(color: string, seed: number, gloss: boolean) {
+  return new THREE.MeshPhysicalMaterial({
+    color: '#ffffff',
+    map: woodGrain(color, seed),
+    roughness: gloss ? 0.32 : 0.58,
+    clearcoat: gloss ? 0.6 : 0.08,
+    clearcoatRoughness: 0.35,
+  });
 }
 
 export function makeMats(s: StyleDef): Mats {
-  const fab = (color: string) =>
-    new THREE.MeshStandardMaterial({ color, roughness: 0.95, map: weaveTexture() });
-  const wood = (color: string) =>
-    new THREE.MeshStandardMaterial({ color, roughness: 0.55, map: woodTexture() });
+  const upholstery: 'linen' | 'boucle' | 'velvet' | 'leather' =
+    s.id === 'industrial' ? 'leather' : s.id === 'classic' ? 'velvet' : s.id === 'japandi' || s.id === 'boho' ? 'boucle' : 'linen';
+  const gloss = s.id === 'classic' || s.id === 'modern';
   return {
-    wood: wood(s.wood),
-    woodDark: wood(s.woodDark),
-    fabric: fab(s.fabric),
-    fabricAlt: fab(s.fabricAlt),
-    accent: fab(s.accent),
-    metal: new THREE.MeshStandardMaterial({ color: s.metal, roughness: s.metalRough, metalness: 0.85 }),
-    stone: new THREE.MeshStandardMaterial({ color: s.stone, roughness: 0.25 }),
-    linen: fab('#f1ede6'),
-    leaf: new THREE.MeshStandardMaterial({ color: '#4d6b3c', roughness: 0.7, side: THREE.DoubleSide }),
-    leafDark: new THREE.MeshStandardMaterial({ color: '#36502c', roughness: 0.7, side: THREE.DoubleSide }),
-    pot: new THREE.MeshStandardMaterial({ color: s.id === 'mediterranean' || s.id === 'boho' ? '#b5714b' : '#d9d4cc', roughness: 0.8 }),
-    black: new THREE.MeshStandardMaterial({ color: '#1a1a1a', roughness: 0.5 }),
-    screen: new THREE.MeshStandardMaterial({ color: '#0d0f12', roughness: 0.15, metalness: 0.2 }),
+    wood: woodMat(s.wood, 1, gloss),
+    woodDark: woodMat(s.woodDark, 2, gloss),
+    fabric: fabricMat(s.fabric, upholstery),
+    fabricAlt: fabricMat(s.fabricAlt, s.id === 'classic' ? 'velvet' : 'linen'),
+    accent: fabricMat(s.accent, 'linen'),
+    linen: fabricMat('#efebe3', 'linen'),
+    bedding: fabricMat(s.id === 'industrial' ? '#d9d6d0' : '#f4f1ea', 'linen'),
+    metal: new THREE.MeshStandardMaterial({ color: s.metal, roughness: s.metalRough, metalness: 0.9 }),
+    brass: new THREE.MeshStandardMaterial({ color: '#b39056', roughness: 0.3, metalness: 1 }),
+    stone: new THREE.MeshPhysicalMaterial({ color: s.stone, roughness: 0.22, clearcoat: 0.4, clearcoatRoughness: 0.2 }),
+    ceramic: new THREE.MeshPhysicalMaterial({ color: '#ece7de', roughness: 0.25, clearcoat: 0.8 }),
+    ceramicDark: new THREE.MeshPhysicalMaterial({ color: s.id === 'mediterranean' || s.id === 'boho' ? '#a5603e' : '#3f3c38', roughness: 0.55, clearcoat: 0.3 }),
+    leaf: new THREE.MeshStandardMaterial({ color: '#4f6d3a', roughness: 0.55, side: THREE.DoubleSide }),
+    leafDark: new THREE.MeshStandardMaterial({ color: '#36502a', roughness: 0.55, side: THREE.DoubleSide }),
+    stem: new THREE.MeshStandardMaterial({ color: '#5b4a35', roughness: 0.9 }),
+    soil: new THREE.MeshStandardMaterial({ color: '#3a2e24', roughness: 1 }),
+    pot: new THREE.MeshPhysicalMaterial({
+      color: s.id === 'mediterranean' || s.id === 'boho' ? '#b5714b' : s.id === 'industrial' ? '#5a5853' : '#dcd6cc',
+      roughness: s.id === 'mediterranean' || s.id === 'boho' ? 0.95 : 0.5,
+      clearcoat: s.id === 'mediterranean' || s.id === 'boho' ? 0 : 0.3,
+    }),
+    black: new THREE.MeshStandardMaterial({ color: '#1c1c1c', roughness: 0.45, metalness: 0.3 }),
+    screen: new THREE.MeshPhysicalMaterial({ color: '#07090c', roughness: 0.08, clearcoat: 1, metalness: 0.1 }),
     lampShade: new THREE.MeshStandardMaterial({
       color: '#f3eadb',
-      roughness: 0.9,
+      roughness: 0.95,
       emissive: '#ffd9a0',
       emissiveIntensity: 0,
       side: THREE.DoubleSide,
     }),
-    glass: new THREE.MeshPhysicalMaterial({ color: '#dfe9ea', roughness: 0.05, transmission: 0.9, transparent: true, opacity: 0.35 }),
-    white: new THREE.MeshStandardMaterial({ color: '#f2f1ee', roughness: 0.35 }),
-    rug: new THREE.MeshStandardMaterial({ map: rugTexture(s.rugPattern, s.rug, s.rugAlt), roughness: 1 }),
-    books: ['#7b5e45', '#c9bba3', '#3e4a52', s.accent, '#e5ddd0', '#5a5f4a'].map(
+    bulb: new THREE.MeshStandardMaterial({ color: '#fff7e8', emissive: '#ffe2b0', emissiveIntensity: 0.6 }),
+    glass: new THREE.MeshPhysicalMaterial({ color: '#e3ecec', roughness: 0.03, transparent: true, opacity: 0.25, depthWrite: false }),
+    white: new THREE.MeshPhysicalMaterial({ color: '#f1efea', roughness: 0.42, clearcoat: 0.2 }),
+    lacquer: new THREE.MeshPhysicalMaterial({
+      color: s.id === 'industrial' ? '#2c2b29' : s.id === 'classic' ? '#e9e3d8' : s.id === 'modern' ? '#d7d3cc' : '#ece8e1',
+      roughness: 0.35,
+      clearcoat: 0.5,
+    }),
+    rug: new THREE.MeshStandardMaterial({
+      map: rugTexture(s.rugPattern, s.rug, s.rugAlt),
+      roughness: 1,
+      normalMap: weaveNormal('boucle'),
+      normalScale: new THREE.Vector2(0.5, 0.5),
+    }),
+    books: ['#7b5e45', '#c9bba3', '#3e4a52', s.accent, '#e5ddd0', '#5a5f4a', '#a4473a', '#2f3b33'].map(
       (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8 }),
     ),
+    art: [0, 1, 2].map(
+      (i) =>
+        new THREE.MeshStandardMaterial({
+          map: artTexture([s.accent, s.fabricAlt, s.woodDark, s.rugAlt], s.id === 'industrial' ? '#d8d3ca' : '#f1ece3', i + s.id.length),
+          roughness: 0.85,
+        }),
+    ),
+    frame: new THREE.MeshStandardMaterial({
+      color: s.id === 'classic' ? '#b39056' : s.id === 'modern' || s.id === 'industrial' ? '#1e1e1e' : s.wood,
+      roughness: 0.4,
+      metalness: s.id === 'classic' ? 0.9 : 0.1,
+    }),
+    rattan: new THREE.MeshPhysicalMaterial({ color: '#c8a46e', roughness: 0.8, normalMap: weaveNormal('linen'), normalScale: new THREE.Vector2(1.2, 1.2) }),
   };
 }
 
@@ -74,16 +154,20 @@ function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 
   return m;
 }
 
-const rbox = (w: number, h: number, d: number, r: number, mat: THREE.Material, x = 0, y = 0, z = 0) =>
-  mesh(new RoundedBoxGeometry(w, h, d, 3, Math.min(r, w / 2 - 0.001, h / 2 - 0.001, d / 2 - 0.001)), mat, x, y + h / 2, z);
+/** Soft block whose bottom sits at y. */
+const soft = (w: number, h: number, d: number, r: number, puff: number, mat: THREE.Material, x = 0, y = 0, z = 0) =>
+  mesh(softBox(w, h, d, r, puff), mat, x, y + h / 2, z);
 
-const box = (w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0) =>
-  mesh(new THREE.BoxGeometry(w, h, d), mat, x, y + h / 2, z);
+/** Crisp block with a tiny bevel (cabinetry, table tops). */
+const block = (w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0, bevel = 0.004) =>
+  mesh(softBox(w, h, d, bevel, 0), mat, x, y + h / 2, z);
 
-const cyl = (rt: number, rb: number, h: number, mat: THREE.Material, x = 0, y = 0, z = 0, seg = 24) =>
+const cyl = (rt: number, rb: number, h: number, mat: THREE.Material, x = 0, y = 0, z = 0, seg = 28) =>
   mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat, x, y + h / 2, z);
 
-function legs(g: THREE.Group, s: StyleDef, m: Mats, w: number, d: number, h: number, inset = 0.06) {
+const lathe = (profile: [number, number][], mat: THREE.Material, x = 0, y = 0, z = 0) => mesh(turned(profile), mat, x, y, z);
+
+function legs(g: THREE.Group, s: StyleDef, m: Mats, w: number, d: number, h: number, inset = 0.06, splay = true) {
   const pts = [
     [-w / 2 + inset, -d / 2 + inset],
     [w / 2 - inset, -d / 2 + inset],
@@ -91,82 +175,210 @@ function legs(g: THREE.Group, s: StyleDef, m: Mats, w: number, d: number, h: num
     [w / 2 - inset, d / 2 - inset],
   ];
   for (const [x, z] of pts) {
-    if (s.legs === 'metal') g.add(box(0.025, h, 0.025, m.metal, x, 0, z));
+    if (s.legs === 'metal') g.add(block(0.022, h, 0.022, m.metal, x, 0, z, 0.003));
     else if (s.legs === 'turned') {
-      g.add(cyl(0.022, 0.014, h, m.woodDark, x, 0, z, 12));
-      g.add(cyl(0.016, 0.016, 0.03, m.metal, x, 0, z, 12));
-    } else g.add(cyl(0.022, 0.014, h, m.wood, x, 0, z, 12));
+      g.add(lathe([[0.012, 0], [0.016, 0.03], [0.022, h * 0.5], [0.02, h * 0.85], [0.024, h * 0.9], [0.02, h], [0, h]], m.woodDark, x, 0, z));
+      g.add(cyl(0.014, 0.014, 0.025, m.brass, x, 0, z, 12));
+    } else {
+      const leg = mesh(turned([[0, 0], [0.013, 0], [0.019, h * 0.95], [0.02, h], [0, h]], 16), m.wood, x, 0, z);
+      if (splay) {
+        leg.rotation.z = Math.sign(x) * -0.06;
+        leg.rotation.x = Math.sign(z) * 0.06;
+      }
+      g.add(leg);
+    }
   }
+}
+
+// ---------------------------------------------------------------- decor
+
+function vase(m: Mats, x: number, y: number, z: number, scale = 1, dark = false) {
+  const g = new THREE.Group();
+  const p: [number, number][] = [
+    [0, 0],
+    [0.05, 0],
+    [0.075, 0.06],
+    [0.08, 0.13],
+    [0.05, 0.22],
+    [0.035, 0.27],
+    [0.042, 0.3],
+    [0.036, 0.3],
+    [0.03, 0.27],
+  ].map(([r, h]) => [r * scale, h * scale]);
+  g.add(lathe(p, dark ? m.ceramicDark : m.ceramic));
+  // a few dried branches
+  for (let i = 0; i < 4; i++) {
+    const b = cyl(0.0025, 0.004, 0.45 * scale, m.stem, 0, 0.27 * scale, 0, 5);
+    b.rotation.set((i - 1.5) * 0.18, i * 1.3, (i % 2 ? 1 : -1) * 0.15);
+    g.add(b);
+  }
+  g.position.set(x, y, z);
+  return g;
+}
+
+function bookStack(m: Mats, x: number, y: number, z: number, n = 3, rot = 0) {
+  const g = new THREE.Group();
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    const w = 0.24 - i * 0.025,
+      d = 0.17 - i * 0.015,
+      t = 0.025 + (i % 2) * 0.01;
+    const b = block(w, t, d, m.books[(i * 3 + Math.round(x * 10)) % m.books.length], 0, h, 0, 0.003);
+    b.rotation.y = (i - 1) * 0.08;
+    g.add(b);
+    h += t;
+  }
+  g.position.set(x, y, z);
+  g.rotation.y = rot;
+  return g;
+}
+
+function bowl(m: Mats, x: number, y: number, z: number) {
+  return lathe(
+    [
+      [0, 0],
+      [0.05, 0],
+      [0.12, 0.04],
+      [0.14, 0.07],
+      [0.135, 0.07],
+      [0.11, 0.045],
+      [0, 0.012],
+    ],
+    m.ceramicDark,
+    x,
+    y,
+    z,
+  );
+}
+
+function tableLamp(s: StyleDef, m: Mats, x: number, y: number, z: number, scale = 1) {
+  const g = new THREE.Group();
+  const base: [number, number][] =
+    s.id === 'japandi' || s.id === 'boho'
+      ? [[0, 0], [0.06, 0], [0.09, 0.08], [0.085, 0.16], [0.04, 0.22], [0.012, 0.25], [0, 0.25]]
+      : [[0, 0], [0.065, 0], [0.065, 0.015], [0.015, 0.03], [0.012, 0.25], [0, 0.25]];
+  g.add(lathe(base.map(([r, h]) => [r * scale, h * scale]), s.id === 'classic' ? m.brass : m.ceramic));
+  const shade = mesh(new THREE.CylinderGeometry(0.1 * scale, 0.14 * scale, 0.19 * scale, 36, 1, true), m.lampShade, 0, 0.33 * scale, 0);
+  shade.castShadow = false;
+  shade.userData.lamp = true;
+  g.add(shade);
+  g.add(mesh(new THREE.SphereGeometry(0.025 * scale, 12, 8), m.bulb, 0, 0.3 * scale, 0));
+  g.position.set(x, y, z);
+  return g;
+}
+
+export function wallArt(s: StyleDef, m: Mats, w = 1.0, h = 0.75, variant = 0) {
+  const g = new THREE.Group();
+  const fd = 0.03;
+  g.add(block(w, h, fd, m.frame, 0, 0, 0, 0.003));
+  const mat = mesh(new THREE.PlaneGeometry(w - 0.1, h - 0.1), m.art[variant % m.art.length], 0, h / 2, fd / 2 + 0.001);
+  mat.castShadow = false;
+  g.add(mat);
+  return g;
 }
 
 // ---------------------------------------------------------------- pieces
 
 function sofa(s: StyleDef, m: Mats, w = 2.3) {
   const g = new THREE.Group();
-  const d = 0.95,
-    r = 0.02 + s.softness * 0.6;
-  const legH = s.id === 'japandi' ? 0.06 : 0.14;
-  const mat = s.id === 'industrial' ? new THREE.MeshStandardMaterial({ color: s.fabric, roughness: 0.55 }) : m.fabric;
-  legs(g, s, m, w - 0.1, d - 0.1, legH, 0.05);
-  g.add(rbox(w, 0.2, d, r, mat, 0, legH, 0));
-  g.add(rbox(w, 0.42, 0.2, r * 1.3, mat, 0, legH + 0.18, -d / 2 + 0.1));
-  g.add(rbox(0.18, 0.28, d, r * 1.3, mat, -w / 2 + 0.09, legH + 0.18, 0));
-  g.add(rbox(0.18, 0.28, d, r * 1.3, mat, w / 2 - 0.09, legH + 0.18, 0));
-  const seats = w > 2 ? 3 : 2;
-  const sw = (w - 0.36) / seats;
-  for (let i = 0; i < seats; i++) {
-    const x = -w / 2 + 0.18 + sw * (i + 0.5);
-    g.add(rbox(sw - 0.01, 0.15, d - 0.25, r * 2, mat, x, legH + 0.2, 0.08));
-    g.add(rbox(sw - 0.03, 0.38, 0.16, r * 2.5, mat, x, legH + 0.33, -d / 2 + 0.27));
+  const d = 0.98;
+  const legH = s.id === 'japandi' || s.id === 'boho' ? 0.05 : 0.13;
+  const armW = s.id === 'modern' ? 0.14 : s.id === 'classic' ? 0.22 : 0.19;
+  const armH = s.id === 'japandi' ? 0.36 : 0.44;
+  const R = 0.04 + s.softness * 0.5;
+  const up = m.fabric;
+  legs(g, s, m, w - 0.12, d - 0.12, legH, 0.04, false);
+  g.add(soft(w, 0.2, d, 0.035, 0, up, 0, legH, 0));
+  g.add(soft(w - 0.02, 0.5, 0.2, R, 0.04, up, 0, legH + 0.12, -d / 2 + 0.1));
+  for (const sg of [-1, 1]) {
+    if (s.id === 'classic') {
+      g.add(soft(armW, armH - 0.08, d, 0.05, 0.05, up, sg * (w / 2 - armW / 2), legH + 0.06, 0));
+      const roll = mesh(new THREE.CylinderGeometry(armW * 0.6, armW * 0.6, d - 0.02, 24), up, sg * (w / 2 - armW / 2), legH + armH, 0);
+      roll.rotation.x = Math.PI / 2;
+      g.add(roll);
+    } else g.add(soft(armW, armH, d, R, 0.05, up, sg * (w / 2 - armW / 2), legH + 0.04, 0));
   }
-  // throw pillows
-  const p1 = rbox(0.45, 0.42, 0.13, 0.05, m.accent, -w / 2 + 0.45, legH + 0.36, -d / 2 + 0.38);
-  p1.rotation.set(-0.25, 0.25, 0.05);
-  const p2 = rbox(0.42, 0.4, 0.12, 0.05, m.fabricAlt, w / 2 - 0.45, legH + 0.36, -d / 2 + 0.38);
-  p2.rotation.set(-0.25, -0.2, -0.05);
-  g.add(p1, p2);
-  // folded throw on one arm
-  g.add(box(0.36, 0.03, d * 0.7, m.linen, w / 2 - 0.09, legH + 0.46, 0.02));
+  const inner = w - armW * 2;
+  const seats = inner > 1.9 ? 3 : 2;
+  const sw = inner / seats;
+  for (let i = 0; i < seats; i++) {
+    const x = -inner / 2 + sw * (i + 0.5);
+    g.add(soft(sw - 0.012, 0.17, d - 0.26, 0.05, 0.07, up, x, legH + 0.19, 0.07));
+    const back = soft(sw - 0.025, 0.46, 0.2, 0.07, 0.09, up, x, legH + 0.33, -d / 2 + 0.29);
+    back.rotation.x = -0.16;
+    g.add(back);
+  }
+  // scatter cushions
+  const pillows: [THREE.Material, number, number][] = [
+    [m.accent, -inner / 2 + 0.28, 0.35],
+    [m.fabricAlt, -inner / 2 + 0.56, 0.15],
+    [m.linen, inner / 2 - 0.3, -0.3],
+  ];
+  if (s.id === 'boho' || s.id === 'mediterranean') pillows.push([m.accent, inner / 2 - 0.58, -0.1]);
+  for (const [mat, x, rot] of pillows) {
+    const p = soft(0.46, 0.46, 0.15, 0.06, 0.2, mat, x, legH + 0.33, -d / 2 + 0.43);
+    p.rotation.set(-0.28, rot, rot * 0.25);
+    g.add(p);
+  }
+  // throw blanket folded over the arm
+  const side = w / 2 - armW / 2;
+  g.add(soft(armW + 0.06, 0.03, 0.5, 0.012, 0.1, m.linen, side, legH + armH + 0.03, 0.05));
+  const drape = soft(0.03, 0.3, 0.5, 0.012, 0.1, m.linen, side + armW / 2 + 0.02, legH + armH - 0.25, 0.05);
+  g.add(drape);
   return g;
 }
 
 function armchair(s: StyleDef, m: Mats) {
   const g = new THREE.Group();
-  const w = 0.8,
+  const w = 0.78,
     d = 0.82,
-    legH = 0.16;
-  const mat = s.id === 'industrial' ? new THREE.MeshStandardMaterial({ color: s.fabric, roughness: 0.55 }) : m.fabricAlt;
-  legs(g, s, m, w - 0.08, d - 0.08, legH, 0.04);
-  g.add(rbox(w, 0.18, d, 0.04, mat, 0, legH, 0));
-  g.add(rbox(w, 0.5, 0.16, 0.05, mat, 0, legH + 0.15, -d / 2 + 0.08));
-  g.add(rbox(0.12, 0.26, d, 0.04, mat, -w / 2 + 0.06, legH + 0.15, 0));
-  g.add(rbox(0.12, 0.26, d, 0.04, mat, w / 2 - 0.06, legH + 0.15, 0));
-  g.add(rbox(w - 0.24, 0.12, d - 0.2, 0.05, mat, 0, legH + 0.17, 0.06));
+    legH = 0.17;
+  const up = s.id === 'industrial' ? m.fabric : m.fabricAlt;
+  if (s.id === 'scandi' || s.id === 'japandi' || s.id === 'mediterranean') {
+    // timber frame lounge chair
+    legs(g, s, m, w - 0.04, d - 0.04, 0.42, 0.02, false);
+    for (const sg of [-1, 1]) g.add(block(0.05, 0.03, d, m.wood, sg * (w / 2 - 0.025), 0.56, 0, 0.01));
+    g.add(soft(w - 0.1, 0.13, d - 0.1, 0.05, 0.08, up, 0, 0.36, 0.03));
+    const back = soft(w - 0.12, 0.5, 0.13, 0.06, 0.1, up, 0, 0.47, -d / 2 + 0.1);
+    back.rotation.x = -0.25;
+    g.add(back);
+    return g;
+  }
+  legs(g, s, m, w - 0.08, d - 0.08, legH, 0.04, false);
+  g.add(soft(w, 0.18, d, 0.04, 0, up, 0, legH, 0));
+  g.add(soft(w, 0.5, 0.16, 0.06, 0.06, up, 0, legH + 0.15, -d / 2 + 0.08));
+  for (const sg of [-1, 1]) g.add(soft(0.13, 0.27, d, 0.05, 0.06, up, sg * (w / 2 - 0.065), legH + 0.14, 0));
+  g.add(soft(w - 0.25, 0.13, d - 0.2, 0.05, 0.08, up, 0, legH + 0.17, 0.06));
+  const p = soft(0.4, 0.36, 0.13, 0.05, 0.2, m.accent, 0, legH + 0.32, -d / 2 + 0.24);
+  p.rotation.x = -0.25;
+  g.add(p);
   return g;
 }
 
 function coffeeTable(s: StyleDef, m: Mats) {
   const g = new THREE.Group();
   if (s.id === 'japandi' || s.id === 'scandi' || s.id === 'boho' || s.id === 'mediterranean') {
-    const top = cyl(0.45, 0.45, 0.05, m.wood, 0, 0.33, 0, 40);
-    g.add(top, cyl(0.3, 0.3, 0.33, s.id === 'boho' ? m.woodDark : m.wood, 0, 0, 0, 40));
+    g.add(lathe([[0, 0.33], [0.46, 0.33], [0.47, 0.345], [0.465, 0.37], [0, 0.37]], m.wood));
+    g.add(lathe([[0, 0], [0.3, 0], [0.31, 0.02], [0.29, 0.33], [0, 0.33]], s.id === 'boho' ? m.woodDark : m.wood));
   } else {
-    g.add(box(1.15, 0.03, 0.6, s.id === 'classic' ? m.stone : m.stone, 0, 0.36, 0));
+    g.add(block(1.15, 0.035, 0.62, m.stone, 0, 0.35, 0, 0.008));
     if (s.legs === 'metal') {
-      g.add(box(1.08, 0.02, 0.02, m.metal, 0, 0.34, -0.27), box(1.08, 0.02, 0.02, m.metal, 0, 0.34, 0.27));
-      legs(g, s, m, 1.1, 0.56, 0.34, 0.02);
-    } else g.add(box(0.9, 0.34, 0.4, m.woodDark, 0, 0, 0));
+      for (const sg of [-1, 1]) {
+        g.add(block(0.02, 0.35, 0.56, m.metal, sg * 0.52, 0, 0, 0.003));
+      }
+      g.add(block(1.06, 0.015, 0.02, m.metal, 0, 0.02, 0, 0.003));
+    } else g.add(block(0.9, 0.35, 0.42, m.woodDark, 0, 0, 0, 0.006));
   }
-  // styling: books + bowl
-  g.add(box(0.26, 0.04, 0.2, m.books[1], 0.12, 0.39, 0.02));
-  g.add(box(0.22, 0.03, 0.17, m.books[2], 0.12, 0.43, 0.02));
-  g.add(cyl(0.1, 0.05, 0.06, m.pot, -0.18, 0.38, -0.04));
+  const top = s.id === 'japandi' || s.id === 'scandi' || s.id === 'boho' || s.id === 'mediterranean' ? 0.37 : 0.385;
+  g.add(bookStack(m, 0.12, top, 0.05, 3, 0.3));
+  g.add(bowl(m, -0.2, top, -0.05));
+  g.add(vase(m, -0.05, top, 0.15, 0.6, true));
   return g;
 }
 
 function rug(s: StyleDef, m: Mats, w = 2.4, d = 1.7) {
   const g = new THREE.Group();
-  const r = box(w, 0.012, d, m.rug, 0, 0, 0);
+  const r = block(w, 0.012, d, m.rug, 0, 0, 0, 0.004);
   r.castShadow = false;
   g.add(r);
   return g;
@@ -174,54 +386,84 @@ function rug(s: StyleDef, m: Mats, w = 2.4, d = 1.7) {
 
 function tvUnit(s: StyleDef, m: Mats, w = 1.9) {
   const g = new THREE.Group();
-  const h = 0.45,
+  const h = 0.46,
     d = 0.42,
-    legH = s.id === 'japandi' || s.id === 'modern' ? 0 : 0.12;
-  if (legH) legs(g, s, m, w, d, legH, 0.08);
-  g.add(box(w, h, d, s.id === 'modern' ? m.white : m.wood, 0, legH, 0));
-  for (let i = 1; i < 3; i++) g.add(box(0.004, h - 0.04, 0.004, m.woodDark, -w / 2 + (w / 3) * i, legH + 0.02, d / 2));
-  // TV mounted above
-  g.add(box(1.24, 0.72, 0.03, m.screen, 0, legH + h + 0.35, -d / 2 + 0.03));
-  g.add(cyl(0.07, 0.05, 0.22, m.pot, w / 2 - 0.18, legH + h, 0));
-  g.add(box(0.22, 0.05, 0.16, m.books[0], -w / 2 + 0.25, legH + h, 0));
+    legH = s.id === 'japandi' || s.id === 'modern' ? 0.02 : 0.12;
+  if (legH > 0.05) legs(g, s, m, w, d, legH, 0.08, false);
+  const body = s.id === 'modern' ? m.lacquer : m.wood;
+  g.add(block(w, h, d, body, 0, legH, 0, 0.006));
+  if (s.id === 'japandi' || s.id === 'scandi' || s.id === 'mediterranean') {
+    // slatted fronts
+    for (let x = -w / 2 + 0.03; x < w / 2 - 0.02; x += 0.035) g.add(block(0.018, h - 0.06, 0.012, m.woodDark, x, legH + 0.03, d / 2, 0.002));
+  } else for (let i = 1; i < 3; i++) g.add(block(0.004, h - 0.04, 0.004, m.black, -w / 2 + (w / 3) * i, legH + 0.02, d / 2, 0.001));
+  const top = legH + h;
+  // wall-mounted TV
+  g.add(block(1.3, 0.75, 0.03, m.black, 0, top + 0.32, -d / 2 + 0.02, 0.004));
+  g.add(mesh(new THREE.PlaneGeometry(1.27, 0.72), m.screen, 0, top + 0.32 + 0.375, -d / 2 + 0.036));
+  g.add(vase(m, w / 2 - 0.2, top, 0, 0.9));
+  g.add(bookStack(m, -w / 2 + 0.3, top, 0, 2));
+  g.add(tableLamp(s, m, -w / 2 + 0.6, top, -0.02, 0.8));
   return g;
 }
 
 function chair(s: StyleDef, m: Mats) {
   const g = new THREE.Group();
-  legs(g, s, m, 0.44, 0.46, 0.45, 0.03);
-  const seat = s.id === 'modern' || s.id === 'classic' ? m.fabric : s.id === 'industrial' ? m.woodDark : m.wood;
-  g.add(rbox(0.46, 0.05, 0.47, 0.015, seat, 0, 0.44, 0));
   if (s.id === 'mediterranean' || s.id === 'boho') {
-    g.add(box(0.44, 0.3, 0.03, m.woodDark, 0, 0.55, -0.22));
-  } else g.add(rbox(0.44, 0.34, 0.05, 0.02, seat, 0, 0.5, -0.21));
+    legs(g, s, m, 0.44, 0.46, 0.45, 0.03);
+    g.add(block(0.46, 0.04, 0.46, m.rattan, 0, 0.45, 0, 0.01));
+    g.add(block(0.44, 0.03, 0.03, m.wood, 0, 0.62, -0.21, 0.01));
+    g.add(block(0.4, 0.22, 0.015, m.rattan, 0, 0.65, -0.21, 0.004));
+    g.add(block(0.44, 0.03, 0.03, m.wood, 0, 0.87, -0.21, 0.01));
+    return g;
+  }
+  legs(g, s, m, 0.44, 0.46, 0.45, 0.03);
+  const seatMat = s.id === 'industrial' ? m.woodDark : s.id === 'japandi' || s.id === 'scandi' ? m.wood : m.fabric;
+  g.add(soft(0.46, 0.05, 0.46, 0.015, s.id === 'modern' || s.id === 'classic' ? 0.12 : 0, seatMat, 0, 0.44, 0));
+  if (s.id === 'scandi' || s.id === 'japandi') {
+    // bent-wood back rail on spindles
+    for (const x of [-0.18, -0.06, 0.06, 0.18]) g.add(cyl(0.007, 0.007, 0.3, m.wood, x, 0.49, -0.2, 8));
+    const rail = soft(0.46, 0.06, 0.04, 0.015, 0, m.wood, 0, 0.78, -0.21);
+    g.add(rail);
+  } else {
+    const back = soft(0.44, 0.36, 0.06, 0.025, 0.08, seatMat, 0, 0.5, -0.21);
+    back.rotation.x = -0.1;
+    g.add(back);
+  }
   return g;
 }
 
 function pendant(s: StyleDef, m: Mats, drop: number) {
   const g = new THREE.Group();
-  g.add(cyl(0.004, 0.004, drop, m.black, 0, -drop, 0, 6));
+  g.add(cyl(0.003, 0.003, drop, m.black, 0, -drop, 0, 6));
+  g.add(cyl(0.05, 0.05, 0.02, m.black, 0, -0.02, 0, 16));
   let shade: THREE.Mesh;
-  if (s.id === 'industrial' || s.id === 'modern') shade = cyl(0.06, 0.24, 0.22, m.metal, 0, -drop - 0.22, 0, 32);
-  else if (s.id === 'japandi' || s.id === 'scandi') shade = mesh(new THREE.SphereGeometry(0.22, 32, 16), m.lampShade, 0, -drop - 0.2, 0);
-  else shade = cyl(0.12, 0.28, 0.3, m.lampShade, 0, -drop - 0.3, 0, 32);
+  if (s.id === 'industrial' || s.id === 'modern')
+    shade = lathe([[0.02, 0], [0.04, -0.02], [0.08, -0.08], [0.22, -0.22], [0.23, -0.23]], m.metal, 0, -drop, 0);
+  else if (s.id === 'japandi' || s.id === 'scandi') shade = mesh(new THREE.SphereGeometry(0.19, 40, 24), m.lampShade, 0, -drop - 0.16, 0);
+  else shade = lathe([[0.03, 0], [0.12, -0.03], [0.26, -0.24], [0.28, -0.3]], m.rattan, 0, -drop, 0);
+  (shade.material as THREE.Material).side = THREE.DoubleSide;
   shade.castShadow = false;
-  shade.userData.lamp = true;
+  if (shade.material === m.lampShade) shade.userData.lamp = true;
   g.add(shade);
+  g.add(mesh(new THREE.SphereGeometry(0.04, 12, 8), m.bulb, 0, -drop - 0.12, 0));
   return g;
 }
 
 function diningTable(s: StyleDef, m: Mats, seats = 6) {
   const g = new THREE.Group();
-  const w = seats >= 6 ? 1.8 : 1.2,
-    d = 0.9;
+  const w = seats >= 6 ? 1.9 : 1.3,
+    d = 0.92;
   const round = s.id === 'japandi' || (s.id === 'scandi' && seats <= 4);
   if (round) {
-    g.add(cyl(0.6, 0.6, 0.04, m.wood, 0, 0.72, 0, 48));
-    g.add(cyl(0.08, 0.2, 0.72, m.wood, 0, 0, 0, 24));
+    g.add(lathe([[0, 0.72], [0.6, 0.72], [0.61, 0.735], [0.6, 0.755], [0, 0.755]], m.wood));
+    g.add(lathe([[0, 0], [0.26, 0], [0.27, 0.02], [0.09, 0.08], [0.07, 0.72], [0, 0.72]], m.wood));
   } else {
-    g.add(box(w, 0.04, d, s.id === 'classic' || s.id === 'modern' ? m.stone : m.wood, 0, 0.72, 0));
-    legs(g, s, m, w, d, 0.72, 0.08);
+    g.add(block(w, 0.04, d, s.id === 'classic' || s.id === 'modern' ? m.stone : m.wood, 0, 0.72, 0, 0.008));
+    if (s.id === 'industrial') {
+      for (const sg of [-1, 1]) {
+        g.add(block(0.05, 0.72, d - 0.1, m.metal, sg * (w / 2 - 0.15), 0, 0, 0.003));
+      }
+    } else legs(g, s, m, w, d, 0.72, 0.08, false);
   }
   const place = (x: number, z: number, rot: number) => {
     const c = chair(s, m);
@@ -232,20 +474,21 @@ function diningTable(s: StyleDef, m: Mats, seats = 6) {
   if (round) {
     for (let i = 0; i < 4; i++) {
       const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-      place(Math.sin(a) * 0.72, Math.cos(a) * 0.72, a + Math.PI);
+      place(Math.sin(a) * 0.74, Math.cos(a) * 0.74, a + Math.PI);
     }
   } else {
     const per = seats >= 6 ? 3 : 2;
     for (let i = 0; i < per; i++) {
       const x = -w / 2 + (w / per) * (i + 0.5);
-      place(x, -d / 2 - 0.12, 0);
-      place(x, d / 2 + 0.12, Math.PI);
+      place(x, -d / 2 - 0.14, 0);
+      place(x, d / 2 + 0.14, Math.PI);
     }
   }
-  // centerpiece
-  g.add(cyl(0.08, 0.06, 0.25, m.pot, 0, 0.76, 0));
-  g.add(mesh(new THREE.IcosahedronGeometry(0.12, 0), m.leaf, 0, 1.05, 0));
-  const p = pendant(s, m, 1.0);
+  // table styling: runner, vase, bowl
+  if (!round) g.add(block(Math.min(w - 0.4, 1.2), 0.004, 0.36, m.linen, 0, 0.76, 0, 0.001));
+  g.add(vase(m, -0.15, 0.76, 0, 1.1));
+  g.add(bowl(m, 0.25, 0.76, 0.05));
+  const p = pendant(s, m, 0.95);
   p.position.y = 2.7;
   p.userData.pendant = true;
   g.add(p);
@@ -255,73 +498,106 @@ function diningTable(s: StyleDef, m: Mats, seats = 6) {
 function bed(s: StyleDef, m: Mats, w = 1.6) {
   const g = new THREE.Group();
   const L = 2.05;
-  const frame = s.id === 'modern' || s.id === 'classic' ? m.fabric : m.wood;
-  g.add(rbox(w + 0.08, 0.28, L, 0.02, frame, 0, 0.04, 0));
-  g.add(rbox(w - 0.02, 0.22, L - 0.08, 0.05, m.white, 0, 0.3, 0.02));
-  // duvet over lower 2/3
-  g.add(rbox(w + 0.02, 0.1, L * 0.68, 0.05, m.linen, 0, 0.45, L * 0.16));
-  g.add(rbox(w + 0.03, 0.05, 0.5, 0.02, m.accent, 0, 0.53, L * 0.36));
-  // pillows
+  const frameMat = s.id === 'modern' || s.id === 'classic' ? m.fabric : m.wood;
+  const legH = s.id === 'japandi' ? 0.02 : 0.08;
+  if (frameMat === m.wood) g.add(block(w + 0.08, 0.24, L, m.wood, 0, legH, 0, 0.01));
+  else g.add(soft(w + 0.1, 0.26, L + 0.02, 0.04, 0.02, frameMat, 0, legH, 0));
+  if (legH > 0.05) legs(g, s, m, w, L, legH, 0.05, false);
+  const mt = legH + 0.24;
+  g.add(soft(w - 0.02, 0.22, L - 0.06, 0.06, 0.04, m.white, 0, mt, 0.01));
+  // duvet with overhang on three sides
+  const dy = mt + 0.2;
+  const dl = L * 0.74;
+  const dz = L / 2 - dl / 2 + 0.03;
+  g.add(soft(w + 0.06, 0.1, dl, 0.05, 0.12, m.bedding, 0, dy, dz));
+  for (const sg of [-1, 1]) g.add(soft(0.035, 0.3, dl - 0.02, 0.015, 0.06, m.bedding, sg * (w / 2 + 0.035), dy - 0.22, dz));
+  g.add(soft(w + 0.1, 0.28, 0.035, 0.015, 0.06, m.bedding, 0, dy - 0.2, dz + dl / 2 + 0.01));
+  // folded throw across the foot
+  g.add(soft(w + 0.12, 0.05, 0.42, 0.02, 0.25, m.accent, 0, dy + 0.1, L / 2 - 0.32));
+  g.add(soft(w + 0.14, 0.24, 0.03, 0.012, 0.05, m.accent, 0, dy - 0.13, L / 2 - 0.1));
+  // pillows: sleeping pillows, euro shams, a small cushion
   const n = w > 1.2 ? 2 : 1;
   for (let i = 0; i < n; i++) {
     const x = n === 1 ? 0 : (i - 0.5) * (w / 2);
-    const p = rbox(w / n - 0.12, 0.14, 0.4, 0.06, m.linen, x, 0.5, -L / 2 + 0.3);
-    p.rotation.x = -0.3;
+    const p = soft(w / n - 0.12, 0.14, 0.46, 0.06, 0.22, m.bedding, x, mt + 0.22, -L / 2 + 0.32);
+    p.rotation.x = -0.2;
     g.add(p);
+    const e = soft(w / n - 0.16, 0.5, 0.13, 0.06, 0.18, m.linen, x, mt + 0.26, -L / 2 + 0.16);
+    e.rotation.x = -0.18;
+    g.add(e);
   }
-  if (n === 2) g.add(rbox(0.5, 0.32, 0.12, 0.05, m.fabricAlt, 0, 0.52, -L / 2 + 0.48));
+  const c = soft(0.45, 0.32, 0.13, 0.05, 0.22, m.fabricAlt, 0, mt + 0.3, -L / 2 + 0.42);
+  c.rotation.x = -0.2;
+  g.add(c);
   // headboard
-  const hb = s.id === 'japandi' ? 0.75 : s.id === 'classic' ? 1.2 : 1.0;
-  g.add(rbox(w + 0.12, hb, 0.08, s.softness * 0.5 + 0.01, s.id === 'classic' ? m.fabricAlt : frame, 0, 0.04, -L / 2 - 0.04));
+  const hbH = s.id === 'japandi' ? 0.8 : s.id === 'classic' ? 1.25 : 1.05;
+  if (s.id === 'classic' || s.id === 'modern') {
+    const ch = Math.max(5, Math.round((w + 0.14) / 0.22));
+    const cw = (w + 0.14) / ch;
+    for (let i = 0; i < ch; i++)
+      g.add(soft(cw - 0.006, hbH, 0.1, 0.04, 0.18, s.id === 'classic' ? m.fabricAlt : frameMat, -(w + 0.14) / 2 + cw * (i + 0.5), legH, -L / 2 - 0.05));
+  } else if (s.id === 'japandi' || s.id === 'scandi') {
+    g.add(block(w + 0.14, hbH, 0.05, m.wood, 0, legH, -L / 2 - 0.03, 0.01));
+    for (let x = -w / 2; x <= w / 2; x += 0.06) g.add(block(0.025, hbH - 0.1, 0.012, m.woodDark, x, legH + 0.05, -L / 2 - 0.002, 0.002));
+  } else if (s.id === 'boho' || s.id === 'mediterranean') {
+    g.add(block(w + 0.14, hbH, 0.05, m.wood, 0, legH, -L / 2 - 0.03, 0.01));
+    g.add(block(w, hbH - 0.2, 0.02, m.rattan, 0, legH + 0.1, -L / 2 + 0.002, 0.004));
+  } else g.add(soft(w + 0.14, hbH, 0.09, 0.03, 0.04, frameMat, 0, legH, -L / 2 - 0.045));
   return g;
 }
 
 function nightstand(s: StyleDef, m: Mats) {
   const g = new THREE.Group();
-  const legH = s.id === 'japandi' ? 0 : 0.12;
-  if (legH) legs(g, s, m, 0.46, 0.38, legH, 0.03);
-  g.add(box(0.46, 0.42, 0.38, m.wood, 0, legH, 0));
-  g.add(box(0.4, 0.004, 0.004, m.woodDark, 0, legH + 0.22, 0.19));
-  // lamp
-  g.add(cyl(0.06, 0.07, 0.2, m.pot, 0, legH + 0.42, 0));
-  const shade = cyl(0.11, 0.14, 0.18, m.lampShade, 0, legH + 0.62, 0);
-  shade.userData.lamp = true;
-  shade.castShadow = false;
-  g.add(shade);
+  const legH = s.id === 'japandi' ? 0.02 : 0.14;
+  if (legH > 0.05) legs(g, s, m, 0.46, 0.38, legH, 0.03, false);
+  g.add(block(0.48, 0.4, 0.38, s.id === 'modern' ? m.lacquer : m.wood, 0, legH, 0, 0.006));
+  g.add(block(0.44, 0.003, 0.004, m.black, 0, legH + 0.2, 0.19, 0.001));
+  g.add(block(0.1, 0.012, 0.015, s.id === 'classic' ? m.brass : m.metal, 0, legH + 0.29, 0.197, 0.003));
+  const top = legH + 0.4;
+  g.add(tableLamp(s, m, -0.08, top, -0.03, 0.95));
+  g.add(bookStack(m, 0.13, top, 0.05, 2, 0.4));
   return g;
 }
 
 function wardrobe(s: StyleDef, m: Mats, w = 1.8) {
   const g = new THREE.Group();
-  const h = 2.35,
+  const h = 2.4,
     d = 0.6;
-  const mat = s.id === 'modern' || s.id === 'scandi' ? m.white : m.wood;
-  g.add(box(w, h, d, mat, 0, 0, 0));
-  const doors = Math.max(2, Math.round(w / 0.6));
-  for (let i = 1; i < doors; i++) g.add(box(0.006, h - 0.02, 0.006, m.woodDark, -w / 2 + (w / doors) * i, 0.01, d / 2));
+  const body = s.id === 'modern' || s.id === 'scandi' || s.id === 'classic' ? m.lacquer : m.wood;
+  g.add(block(w, 0.08, d - 0.05, m.black, 0, 0, -0.02, 0.002));
+  g.add(block(w, h - 0.08, d, body, 0, 0.08, 0, 0.004));
+  const doors = Math.max(2, Math.round(w / 0.55));
+  const dw = w / doors;
   for (let i = 0; i < doors; i++) {
-    const x = -w / 2 + (w / doors) * (i + 0.5) + (i % 2 ? -0.22 : 0.22) * (w / doors / 0.6) * 0.4;
-    g.add(box(0.012, 0.3, 0.02, m.metal, x, 1.0, d / 2 + 0.01));
+    const x = -w / 2 + dw * (i + 0.5);
+    g.add(block(dw - 0.006, h - 0.1, 0.02, body, x, 0.09, d / 2 + 0.008, 0.003));
+    if (s.id === 'classic') {
+      g.add(block(dw - 0.14, 0.9, 0.008, body, x, 0.3, d / 2 + 0.02, 0.01));
+      g.add(block(dw - 0.14, 0.9, 0.008, body, x, 1.32, d / 2 + 0.02, 0.01));
+    }
+    const hx = x + (i % 2 ? -1 : 1) * (dw / 2 - 0.05);
+    g.add(block(0.014, 0.32, 0.022, s.id === 'classic' ? m.brass : m.metal, hx, 0.95, d / 2 + 0.03, 0.004));
   }
   return g;
 }
 
 function desk(s: StyleDef, m: Mats) {
   const g = new THREE.Group();
-  g.add(box(1.3, 0.03, 0.62, m.wood, 0, 0.72, 0));
-  legs(g, s, m, 1.3, 0.62, 0.72, 0.04);
+  g.add(block(1.3, 0.03, 0.62, m.wood, 0, 0.72, 0, 0.006));
+  if (s.id !== 'industrial') g.add(block(0.4, 0.13, 0.5, m.wood, 0.4, 0.58, -0.02, 0.004));
+  legs(g, s, m, 1.3, 0.62, 0.72, 0.04, false);
+  const top = 0.75;
   // laptop
-  g.add(box(0.32, 0.015, 0.22, m.metal, 0.05, 0.75, 0.05));
-  const lid = box(0.32, 0.22, 0.008, m.screen, 0.05, 0.75, -0.06);
-  lid.rotation.x = -0.25;
+  g.add(block(0.32, 0.012, 0.22, m.metal, 0.05, top, 0.06, 0.003));
+  const lid = new THREE.Group();
+  lid.add(block(0.32, 0.22, 0.008, m.metal, 0, 0, 0, 0.002));
+  lid.add(mesh(new THREE.PlaneGeometry(0.3, 0.19), m.screen, 0, 0.11, 0.005));
+  lid.position.set(0.05, top + 0.012, -0.05);
+  lid.rotation.x = -0.22;
   g.add(lid);
-  // lamp
-  g.add(cyl(0.07, 0.07, 0.015, m.black, -0.48, 0.75, -0.12));
-  g.add(cyl(0.007, 0.007, 0.4, m.black, -0.48, 0.75, -0.12, 6));
-  const sh = cyl(0.05, 0.09, 0.12, m.lampShade, -0.48, 1.12, -0.06);
-  sh.userData.lamp = true;
-  g.add(sh);
-  g.add(box(0.2, 0.06, 0.15, m.books[3], 0.45, 0.75, -0.15));
+  g.add(tableLamp(s, m, -0.48, top, -0.15, 0.85));
+  g.add(bookStack(m, 0.45, top, -0.12, 3, -0.2));
+  g.add(cyl(0.035, 0.03, 0.1, m.ceramic, -0.25, top, -0.18, 20));
   const c = chair(s, m);
   c.position.set(0, 0, 0.55);
   c.rotation.y = Math.PI;
@@ -331,46 +607,105 @@ function desk(s: StyleDef, m: Mats) {
 
 function plant(s: StyleDef, m: Mats, tall = 1.4) {
   const g = new THREE.Group();
-  g.add(cyl(0.17, 0.13, 0.36, m.pot, 0, 0, 0, 24));
-  g.add(cyl(0.012, 0.012, tall * 0.6, m.woodDark, 0, 0.3, 0, 6));
-  const leafGeo = new THREE.SphereGeometry(0.12, 8, 6);
-  leafGeo.scale(1, 0.25, 1.6);
-  let seed = 3;
+  const big = tall > 1.1;
+  const potH = big ? 0.42 : 0.3,
+    potR = big ? 0.2 : 0.15;
+  if (s.id === 'boho' || s.id === 'mediterranean') {
+    // woven basket
+    g.add(lathe([[0, 0], [potR * 0.85, 0], [potR, potH * 0.2], [potR * 1.02, potH], [potR * 0.95, potH], [0, potH * 0.9]], m.rattan));
+  } else
+    g.add(
+      lathe(
+        [
+          [0, 0],
+          [potR * 0.8, 0],
+          [potR * 0.82, 0.02],
+          [potR, potH * 0.85],
+          [potR * 1.02, potH],
+          [potR * 0.95, potH],
+          [0, potH * 0.92],
+        ],
+        m.pot,
+      ),
+    );
+  g.add(cyl(potR * 0.94, potR * 0.94, 0.01, m.soil, 0, potH * 0.9, 0, 24));
+  let seed = Math.round(tall * 100) + s.id.length;
   const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < 26; i++) {
-    const y = 0.45 + r() * (tall - 0.45);
-    const a = r() * Math.PI * 2;
-    const rad = 0.08 + r() * 0.22 * (1 - (y - 0.45) / tall / 1.5);
-    const l = mesh(leafGeo, i % 3 ? m.leaf : m.leafDark, Math.cos(a) * rad, y, Math.sin(a) * rad);
-    l.rotation.set((r() - 0.5) * 1.2, a, (r() - 0.5) * 0.8);
-    g.add(l);
+  if (big && s.id !== 'mediterranean') {
+    // fiddle-leaf fig: a few trunks with big leaves
+    const leaf = leafGeometry(0.26, 0.17, 0.2);
+    for (let k = 0; k < 3; k++) {
+      const trunkH = tall * (0.75 + r() * 0.25);
+      const tx = (r() - 0.5) * 0.08,
+        tz = (r() - 0.5) * 0.08;
+      const trunk = cyl(0.008, 0.014, trunkH, m.stem, tx, potH * 0.9, tz, 6);
+      trunk.rotation.z = (r() - 0.5) * 0.15;
+      g.add(trunk);
+      const n = 9 + Math.floor(r() * 5);
+      for (let i = 0; i < n; i++) {
+        const y = potH + trunkH * (0.35 + (i / n) * 0.65);
+        const l = mesh(leaf, i % 3 ? m.leaf : m.leafDark, tx, y, tz);
+        l.rotation.set(-0.9 - r() * 0.6, r() * Math.PI * 2, 0, 'YXZ');
+        const sc = 0.8 + r() * 0.5;
+        l.scale.setScalar(sc);
+        g.add(l);
+      }
+    }
+  } else {
+    // olive / small-leaved shrub
+    const leaf = leafGeometry(0.07, 0.022, 0.1);
+    const trunkH = tall * 0.6;
+    g.add(cyl(0.01, 0.018, trunkH, m.stem, 0, potH * 0.9, 0, 6));
+    for (let i = 0; i < 180; i++) {
+      const a = r() * Math.PI * 2;
+      const y = potH + trunkH * 0.6 + r() * (tall - potH - trunkH * 0.6);
+      const rad = 0.05 + r() * 0.24 * Math.sin(((y - potH) / tall) * Math.PI);
+      const l = mesh(leaf, i % 3 ? m.leaf : m.leafDark, Math.cos(a) * rad, y, Math.sin(a) * rad);
+      l.rotation.set(r() * Math.PI, a, r() * Math.PI);
+      l.castShadow = false;
+      g.add(l);
+    }
   }
   return g;
 }
 
 function floorLamp(s: StyleDef, m: Mats) {
   const g = new THREE.Group();
-  g.add(cyl(0.16, 0.16, 0.02, m.metal, 0, 0, 0, 32));
-  g.add(cyl(0.012, 0.012, 1.45, m.metal, 0, 0.02, 0, 8));
-  const sh = cyl(0.17, 0.21, 0.3, m.lampShade, 0, 1.4, 0, 32);
+  if (s.id === 'scandi' || s.id === 'boho' || s.id === 'mediterranean') {
+    // tripod
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2;
+      const leg = cyl(0.01, 0.012, 1.3, m.wood, Math.sin(a) * 0.12, 0, Math.cos(a) * 0.12, 8);
+      leg.rotation.set(-Math.cos(a) * 0.09, 0, Math.sin(a) * 0.09);
+      g.add(leg);
+    }
+  } else {
+    g.add(cyl(0.15, 0.16, 0.025, m.metal, 0, 0, 0, 36));
+    g.add(cyl(0.01, 0.01, 1.4, m.metal, 0, 0.02, 0, 10));
+  }
+  const sh = mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.32, 40, 1, true), m.lampShade, 0, 1.45, 0);
   sh.userData.lamp = true;
   sh.castShadow = false;
   g.add(sh);
+  g.add(mesh(new THREE.SphereGeometry(0.035, 12, 8), m.bulb, 0, 1.4, 0));
   return g;
 }
 
 function sideboard(s: StyleDef, m: Mats, w = 1.6) {
   const g = new THREE.Group();
   const legH = 0.16;
-  legs(g, s, m, w, 0.42, legH, 0.06);
-  g.add(box(w, 0.62, 0.42, s.id === 'modern' ? m.woodDark : m.wood, 0, legH, 0));
-  for (let i = 1; i < 3; i++) g.add(box(0.004, 0.58, 0.004, m.woodDark, -w / 2 + (w / 3) * i, legH + 0.02, 0.21));
-  const top = legH + 0.62;
-  g.add(cyl(0.08, 0.05, 0.34, m.pot, w / 2 - 0.25, top, 0));
-  g.add(box(0.24, 0.04, 0.18, m.books[4], -w / 2 + 0.3, top, 0));
-  g.add(box(0.2, 0.04, 0.15, m.books[2], -w / 2 + 0.3, top + 0.04, 0));
-  // mirror / art above
-  g.add(box(0.8, 0.6, 0.02, s.id === 'classic' ? m.metal : m.linen, 0, top + 0.45, -0.19));
+  legs(g, s, m, w, 0.42, legH, 0.06, false);
+  g.add(block(w, 0.64, 0.42, s.id === 'modern' ? m.woodDark : m.wood, 0, legH, 0, 0.006));
+  if (s.id === 'japandi' || s.id === 'scandi' || s.id === 'mediterranean')
+    for (let x = -w / 2 + 0.03; x < w / 2 - 0.02; x += 0.035) g.add(block(0.018, 0.58, 0.012, m.woodDark, x, legH + 0.03, 0.21, 0.002));
+  else for (let i = 1; i < 3; i++) g.add(block(0.004, 0.6, 0.004, m.black, -w / 2 + (w / 3) * i, legH + 0.02, 0.21, 0.001));
+  const top = legH + 0.64;
+  g.add(tableLamp(s, m, w / 2 - 0.25, top, 0, 1.1));
+  g.add(vase(m, -w / 2 + 0.25, top, 0.02, 1.2, true));
+  g.add(bookStack(m, -w / 2 + 0.55, top, 0.02, 2, 0.2));
+  const art = wallArt(s, m, Math.min(1.0, w * 0.6), 0.7, 1);
+  art.position.set(0, top + 0.35, -0.2);
+  g.add(art);
   return g;
 }
 
@@ -380,14 +715,17 @@ function singleBed(s: StyleDef, m: Mats) {
 
 function bistroSet(s: StyleDef, m: Mats) {
   const g = new THREE.Group();
-  g.add(cyl(0.32, 0.32, 0.03, m.wood, 0, 0.7, 0, 32));
-  g.add(cyl(0.025, 0.025, 0.7, m.metal, 0, 0, 0, 8));
-  g.add(cyl(0.2, 0.2, 0.02, m.metal, 0, 0, 0, 24));
-  for (const sgn of [-1, 1]) {
+  g.add(lathe([[0, 0.7], [0.33, 0.7], [0.335, 0.72], [0, 0.72]], s.id === 'industrial' ? m.metal : m.wood));
+  g.add(cyl(0.02, 0.025, 0.7, m.metal, 0, 0, 0, 12));
+  g.add(lathe([[0, 0], [0.2, 0], [0.18, 0.02], [0, 0.03]], m.metal));
+  g.add(vase(m, 0.08, 0.72, 0.04, 0.55, true));
+  for (const sg of [-1, 1]) {
     const c = chair(s, m);
-    c.position.set(sgn * 0.62, 0, 0);
-    c.rotation.y = -sgn * Math.PI / 2;
+    c.position.set(sg * 0.64, 0, 0);
+    c.rotation.y = -sg * (Math.PI / 2);
     g.add(c);
+    const cu = soft(0.4, 0.06, 0.4, 0.03, 0.3, m.accent, sg * 0.64, 0.49, 0);
+    g.add(cu);
   }
   return g;
 }
@@ -395,46 +733,55 @@ function bistroSet(s: StyleDef, m: Mats) {
 function shelf(s: StyleDef, m: Mats) {
   const g = new THREE.Group();
   const w = 0.9,
-    h = 1.9,
+    h = 1.95,
     d = 0.34;
-  const mat = s.id === 'industrial' ? m.metal : m.wood;
-  g.add(box(0.025, h, d, mat, -w / 2, 0, 0), box(0.025, h, d, mat, w / 2, 0, 0));
+  const frame = s.id === 'industrial' ? m.metal : m.wood;
+  g.add(block(0.025, h, d, frame, -w / 2, 0, 0, 0.003), block(0.025, h, d, frame, w / 2, 0, 0, 0.003));
+  g.add(block(w, h, 0.012, s.id === 'industrial' ? m.wood : frame, 0, 0, -d / 2 + 0.006, 0.002));
   let k = 0;
   for (let i = 0; i < 5; i++) {
-    const y = 0.05 + i * 0.45;
-    g.add(box(w, 0.025, d, i % 2 && s.id === 'industrial' ? m.wood : mat, 0, y, 0));
+    const y = 0.05 + i * 0.46;
+    g.add(block(w, 0.025, d, i % 2 && s.id === 'industrial' ? m.wood : frame, 0, y, 0, 0.003));
     if (i === 4) break;
     let x = -w / 2 + 0.04;
     const fill = 0.35 + ((i * 37) % 5) / 10;
     while (x < -w / 2 + w * fill) {
       const bw = 0.025 + ((k * 13) % 4) * 0.01;
       const bh = 0.22 + ((k * 7) % 5) * 0.025;
-      g.add(box(bw, bh, 0.22, m.books[k % m.books.length], x + bw / 2, y + 0.025, 0));
+      const b = block(bw, bh, 0.22, m.books[k % m.books.length], x + bw / 2, y + 0.025, 0.02, 0.002);
+      if (k % 9 === 8) b.rotation.z = -0.2;
+      g.add(b);
       x += bw + 0.002;
       k++;
     }
-    if (i % 2 === 0) g.add(cyl(0.05, 0.04, 0.14, m.pot, w / 2 - 0.15, y + 0.025, 0));
+    if (i % 2 === 0) g.add(vase(m, w / 2 - 0.16, y + 0.025, 0.02, 0.6, i === 2));
+    else g.add(bookStack(m, w / 2 - 0.2, y + 0.025, 0.02, 3));
   }
   return g;
 }
 
+function art(s: StyleDef, m: Mats, w = 1.1) {
+  return wallArt(s, m, w, w * 0.72, 0);
+}
+
 export const FOOTPRINT: Record<FurnitureKind, [number, number]> = {
-  sofa: [2.3, 0.95],
+  sofa: [2.3, 0.98],
   armchair: [0.8, 0.82],
-  coffeeTable: [1.15, 0.6],
+  coffeeTable: [1.15, 0.62],
   rug: [2.4, 1.7],
   tvUnit: [1.9, 0.42],
-  diningTable: [1.8, 1.9],
-  bed: [1.72, 2.15],
-  nightstand: [0.46, 0.38],
-  wardrobe: [1.8, 0.6],
+  diningTable: [1.9, 1.95],
+  bed: [1.74, 2.15],
+  nightstand: [0.48, 0.38],
+  wardrobe: [1.8, 0.62],
   desk: [1.3, 1.1],
   plant: [0.5, 0.5],
-  floorLamp: [0.4, 0.4],
+  floorLamp: [0.44, 0.44],
   sideboard: [1.6, 0.42],
-  singleBed: [1.0, 2.15],
+  singleBed: [1.04, 2.15],
   bistroSet: [1.6, 0.7],
   shelf: [0.9, 0.34],
+  art: [1.1, 0.04],
 };
 
 export function buildFurniture(kind: FurnitureKind, s: StyleDef, m: Mats, opts: { w?: number; d?: number; seats?: number } = {}) {
@@ -471,6 +818,8 @@ export function buildFurniture(kind: FurnitureKind, s: StyleDef, m: Mats, opts: 
       return bistroSet(s, m);
     case 'shelf':
       return shelf(s, m);
+    case 'art':
+      return art(s, m, opts.w);
   }
 }
 
@@ -478,60 +827,108 @@ export function buildFurniture(kind: FurnitureKind, s: StyleDef, m: Mats, opts: 
 
 export function kitchenRun(s: StyleDef, m: Mats, len: number, withUppers = true) {
   const g = new THREE.Group();
-  const cab = s.id === 'scandi' || s.id === 'modern' ? m.white : s.id === 'industrial' ? m.black : m.wood;
-  const fridgeW = len > 2.6 ? 0.7 : 0;
+  const cab = s.id === 'scandi' || s.id === 'modern' || s.id === 'classic' ? m.lacquer : s.id === 'industrial' ? m.black : m.wood;
+  const handle = s.id === 'classic' ? m.brass : m.metal;
+  const fridgeW = len > 2.6 ? 0.72 : 0;
   const runLen = len - fridgeW;
   const x0 = -len / 2 + fridgeW;
-  g.add(box(runLen, 0.86, 0.6, cab, x0 + runLen / 2, 0.04, 0));
-  g.add(box(runLen, 0.1, 0.56, m.black, x0 + runLen / 2, 0, -0.02));
-  g.add(box(runLen + 0.01, 0.04, 0.63, m.stone, x0 + runLen / 2, 0.9, 0.015));
+  g.add(block(runLen, 0.1, 0.54, m.black, x0 + runLen / 2, 0, -0.03, 0.002));
   const units = Math.max(1, Math.round(runLen / 0.6));
   const uw = runLen / units;
-  for (let i = 1; i < units; i++) g.add(box(0.004, 0.84, 0.004, m.woodDark, x0 + uw * i, 0.05, 0.3));
-  // sink + tap
-  g.add(box(0.5, 0.01, 0.4, m.metal, x0 + runLen * 0.35, 0.94, 0.02));
-  g.add(cyl(0.012, 0.012, 0.3, m.metal, x0 + runLen * 0.35, 0.94, -0.2, 8));
-  // hob
-  g.add(box(0.58, 0.008, 0.5, m.screen, x0 + runLen * 0.72, 0.94, 0.02));
-  // backsplash
-  g.add(box(runLen, 0.6, 0.015, m.stone, x0 + runLen / 2, 0.94, -0.3));
-  if (withUppers) {
-    g.add(box(runLen, 0.75, 0.35, cab, x0 + runLen / 2, 1.55, -0.12));
-    for (let i = 1; i < units; i++) g.add(box(0.004, 0.73, 0.004, m.woodDark, x0 + uw * i, 1.56, 0.055));
+  const ovenUnit = Math.min(units - 1, Math.round(units * 0.7));
+  for (let i = 0; i < units; i++) {
+    const x = x0 + uw * (i + 0.5);
+    g.add(block(uw - 0.004, 0.76, 0.58, cab, x, 0.1, 0, 0.003));
+    if (i === ovenUnit && units > 1) {
+      g.add(block(uw - 0.04, 0.5, 0.02, m.black, x, 0.18, 0.3, 0.003));
+      g.add(mesh(new THREE.PlaneGeometry(uw - 0.12, 0.3), m.screen, x, 0.42, 0.312));
+      g.add(block(uw - 0.16, 0.012, 0.03, handle, x, 0.64, 0.32, 0.004));
+    } else {
+      g.add(block(Math.min(0.3, uw - 0.2), 0.012, 0.025, handle, x, 0.78, 0.305, 0.004));
+    }
   }
-  if (fridgeW) g.add(box(fridgeW - 0.02, 2.15, 0.65, cab, -len / 2 + fridgeW / 2, 0, 0.02));
-  g.add(cyl(0.09, 0.07, 0.18, m.pot, x0 + runLen * 0.12, 0.92, -0.1));
+  g.add(block(runLen + 0.01, 0.035, 0.63, m.stone, x0 + runLen / 2, 0.86, 0.015, 0.004));
+  // sink + tap
+  const sx = x0 + runLen * 0.32;
+  g.add(block(0.5, 0.006, 0.4, m.black, sx, 0.894, 0.02, 0.002));
+  const tap = new THREE.Group();
+  tap.add(cyl(0.015, 0.018, 0.3, m.metal, 0, 0, 0, 16));
+  const spout = cyl(0.01, 0.01, 0.2, m.metal, 0, 0.3, 0.08, 12);
+  spout.rotation.x = Math.PI / 2;
+  tap.add(spout);
+  tap.position.set(sx, 0.895, -0.22);
+  g.add(tap);
+  // hob
+  const hx = x0 + uw * (ovenUnit + 0.5);
+  g.add(block(0.58, 0.006, 0.5, m.screen, hx, 0.895, 0.02, 0.002));
+  // backsplash
+  g.add(block(runLen, 0.62, 0.015, s.id === 'mediterranean' || s.id === 'boho' ? m.ceramicDark : m.stone, x0 + runLen / 2, 0.895, -0.3, 0.002));
+  if (withUppers) {
+    for (let i = 0; i < units; i++) {
+      const x = x0 + uw * (i + 0.5);
+      if (i === ovenUnit) {
+        // range hood
+        g.add(block(uw - 0.02, 0.2, 0.4, m.metal, x, 1.6, -0.12, 0.004));
+        g.add(block(0.3, 0.5, 0.25, m.metal, x, 1.8, -0.2, 0.004));
+      } else {
+        g.add(block(uw - 0.004, 0.72, 0.34, cab, x, 1.55, -0.13, 0.003));
+        g.add(block(0.012, 0.012, 0.025, handle, x + uw / 2 - 0.06, 1.6, 0.05, 0.002));
+      }
+    }
+    // a little open-shelf styling under the cabinets
+    g.add(vase(m, x0 + runLen * 0.12, 0.895, -0.12, 0.7, true));
+    g.add(bowl(m, x0 + runLen * 0.55, 0.895, -0.1));
+  }
+  if (fridgeW) {
+    g.add(block(fridgeW - 0.02, 2.2, 0.66, cab, -len / 2 + fridgeW / 2, 0, 0.02, 0.004));
+    g.add(block(0.015, 1.1, 0.03, handle, -len / 2 + fridgeW - 0.08, 0.8, 0.37, 0.004));
+  }
   return g;
 }
 
 export function bathSet(s: StyleDef, m: Mats, len: number) {
   const g = new THREE.Group();
   const vw = Math.min(1.0, len * 0.45);
-  g.add(box(vw, 0.45, 0.48, s.id === 'modern' ? m.woodDark : m.wood, 0, 0.4, 0));
-  g.add(box(vw + 0.02, 0.06, 0.5, m.white, 0, 0.85, 0));
-  g.add(box(vw * 0.8, 0.8, 0.02, m.glass, 0, 1.1, -0.23));
-  g.add(cyl(0.01, 0.01, 0.18, m.metal, 0, 0.91, -0.17, 8));
+  g.add(block(vw, 0.45, 0.48, s.id === 'modern' ? m.woodDark : m.wood, 0, 0.4, 0, 0.004));
+  g.add(block(vw + 0.02, 0.025, 0.5, m.stone, 0, 0.85, 0, 0.003));
+  // vessel basin
+  g.add(lathe([[0, 0], [0.12, 0], [0.18, 0.06], [0.2, 0.13], [0.19, 0.13], [0.16, 0.06], [0, 0.03]], m.ceramic, 0, 0.875, 0.03));
+  const tap = cyl(0.01, 0.01, 0.3, m.metal, 0, 0.875, -0.2, 12);
+  g.add(tap);
+  const sp = cyl(0.008, 0.008, 0.14, m.metal, 0, 1.17, -0.14, 10);
+  sp.rotation.x = Math.PI / 2;
+  g.add(sp);
+  // mirror with a soft backlight
+  g.add(block(vw * 0.8, 0.8, 0.02, m.glass, 0, 1.15, -0.23, 0.004));
+  const glow = block(vw * 0.82, 0.82, 0.005, m.bulb, 0, 1.14, -0.242, 0.001);
+  glow.castShadow = false;
+  g.add(glow);
+  // towel on a rail
+  g.add(cyl(0.008, 0.008, 0.5, m.metal, -vw / 2 - 0.35, 1.2, -0.2, 8).rotateZ(Math.PI / 2));
+  g.add(soft(0.42, 0.55, 0.04, 0.015, 0.1, m.linen, -vw / 2 - 0.35, 0.68, -0.18));
   if (len > 1.6) {
-    // wc
-    const x = vw / 2 + 0.35;
-    g.add(rbox(0.36, 0.4, 0.55, 0.08, m.white, x, 0, 0.05));
-    g.add(rbox(0.38, 0.32, 0.16, 0.03, m.white, x, 0.4, -0.18));
+    // wall-hung wc
+    const x = vw / 2 + 0.38;
+    g.add(soft(0.36, 0.34, 0.54, 0.12, 0.1, m.ceramic, x, 0.08, 0.03));
+    g.add(soft(0.38, 0.03, 0.5, 0.012, 0, m.ceramic, x, 0.42, 0.04));
+    g.add(block(0.2, 0.15, 0.01, m.white, x, 1.0, -0.24, 0.003));
   }
   return g;
 }
 
 export function showerGlass(m: Mats) {
   const g = new THREE.Group();
-  const p = box(0.9, 2.0, 0.012, m.glass, 0, 0, 0);
+  const p = block(0.9, 2.0, 0.01, m.glass, 0, 0.02, 0, 0.002);
   p.castShadow = false;
   g.add(p);
-  g.add(box(0.03, 2.0, 0.03, m.metal, 0.45, 0, 0));
+  g.add(block(0.025, 2.0, 0.025, m.metal, 0.45, 0, 0, 0.003));
+  g.add(cyl(0.12, 0.12, 0.01, m.metal, 0.2, 2.1, -0.6, 32));
   return g;
 }
 
 export function disposeGroup(g: THREE.Object3D) {
   g.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (mesh.isMesh) mesh.geometry.dispose();
+    if (mesh.isMesh && !mesh.userData.libraryAsset) mesh.geometry.dispose();
   });
 }

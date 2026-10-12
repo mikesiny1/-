@@ -8,12 +8,16 @@ import type { DesignBrief, RoomType } from '../../lib/types';
 import type { FrameInfo, Mode } from '../../three/engine';
 import type { StepProps } from '../ProjectView';
 
-function Viewer3D({ p }: { p: StepProps['p'] }) {
+export function Viewer3D({ p }: { p: StepProps['p'] }) {
   const box = useRef<HTMLDivElement>(null);
   const { engine, ready, error } = useEngine(box, p);
   const [f, setF] = useState<FrameInfo | null>(null);
   const [mode, setMode] = useState<Mode>('tour');
   const [playing, setPlaying] = useState(false);
+  const [hq, setHq] = useState(true);
+  useEffect(() => {
+    if (engine) setHq(engine.hq);
+  }, [engine]);
 
   useEffect(() => {
     if (!engine) return;
@@ -66,6 +70,18 @@ function Viewer3D({ p }: { p: StepProps['p'] }) {
                 </span>
               ),
             },
+          ]}
+        />
+        <span className="spacer" />
+        <Seg
+          value={hq ? 'hq' : 'fast'}
+          onChange={(v) => {
+            setHq(v === 'hq');
+            if (engine) engine.hq = v === 'hq';
+          }}
+          options={[
+            { id: 'hq', label: 'איכות מלאה' },
+            { id: 'fast', label: 'מהיר' },
           ]}
         />
       </div>

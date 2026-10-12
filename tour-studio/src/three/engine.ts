@@ -2,10 +2,16 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { astar, dilate, downsample, mergeRects, regionAt, type PlanModel } from '../lib/plan';
+import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { astar, classifyOpening, dilate, downsample, mergeRects, regionAt, type PlanModel } from '../lib/plan';
+import { buildOpening, glazing, openingMats, type OpeningSpec } from './openings';
 import { roomName, styleById, type StyleDef } from '../lib/styles';
-import type { DesignBrief, PlanRoom, RoomType } from '../lib/types';
-import { bathSet, buildFurniture, disposeGroup, kitchenRun, makeMats, showerGlass, type Mats } from './furniture';
+import type { DesignBrief, FurnitureKind, PlanRoom, RoomType } from '../lib/types';
+import { bathSet, buildFurniture, disposeGroup, FOOTPRINT, kitchenRun, makeMats, showerGlass, type Mats } from './furniture';
 import { floorTexture, skyTexture, smallTileTexture } from './textures';
 
 export const WALL_H = 2.7;
@@ -95,6 +101,14 @@ export class TourEngine {
   private floorMeshes: THREE.Object3D[] = [];
   private resizeObs: ResizeObserver;
   private dragging: { x: number; y: number; moved: boolean } | null = null;
+  private openingsGroup = new THREE.Group();
+  private windowLights = new THREE.Group();
+  private openingSpecs: OpeningSpec[] = [];
+  private downlightMat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#fff1dc', emissiveIntensity: 0.6 });
+  private composer: EffectComposer | null = null;
+  private gtao: GTAOPass | null = null;
+  /** ambient occlusion and multisampled post-processing; off for slow devices */
+  hq = true;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -102,8 +116,9 @@ export class TourEngine {
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMapping = THREE.AgXToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
+    RectAreaLightUniformsLib.init();
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = 'block';
@@ -119,21 +134,28 @@ export class TourEngine {
       new THREE.MeshBasicMaterial({ map: skyTexture(), side: THREE.BackSide, fog: false }),
     );
     this.scene.add(sky);
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(400, 400),
-      new THREE.MeshStandardMaterial({ color: '#d4cbbb', roughness: 1 }),
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.03;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
+    this.scene.add(cityContext());
 
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.02;
     this.scene.add(this.hemi, this.sun, this.sun.target);
-    this.scene.add(this.structure, this.ceiling, this.fixtures, this.furniture, this.roomLights);
+    this.scene.add(this.structure, this.ceiling, this.fixtures, this.furniture, this.roomLights, this.openingsGroup, this.windowLights);
+
+    try {
+      const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+      this.composer = new EffectComposer(this.renderer, rt);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      this.gtao = new GTAOPass(this.scene, this.camera, 1, 1);
+      this.gtao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.6, thickness: 1.2, scale: 1.25, samples: 12 });
+      this.gtao.blendIntensity = 0.9;
+      this.composer.addPass(this.gtao);
+      this.composer.addPass(new OutputPass());
+    } catch {
+      this.composer = null;
+    }
+    this.hq = !/Android|iPhone|iPad/i.test(navigator.userAgent);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -211,6 +233,46 @@ export class TourEngine {
       walls.castShadow = walls.receiveShadow = true;
       walls.name = 'walls';
       this.structure.add(walls);
+      // skirting boards: a slightly wider sleeve at the foot of every wall
+      const skirt = wallGeos.map((g) => {
+        g.computeBoundingBox();
+        const b = g.boundingBox!;
+        const k = new THREE.BoxGeometry(b.max.x - b.min.x + 0.024, 0.08, b.max.z - b.min.z + 0.024);
+        k.translate((b.min.x + b.max.x) / 2, 0.04, (b.min.z + b.max.z) / 2);
+        return k;
+      });
+      const sk = new THREE.Mesh(mergeGeometries(skirt), new THREE.MeshStandardMaterial({ color: '#f3f1ec', roughness: 0.5 }));
+      sk.name = 'skirting';
+      sk.receiveShadow = true;
+      this.structure.add(sk);
+    }
+
+    // doors, windows and sliders found in the plan
+    this.openingSpecs = [];
+    const isBalcony = (l: number) => typeByLabel.get(l) === 'balcony';
+    const curtainRooms: RoomType[] = ['living', 'master', 'bedroom', 'kids', 'office', 'dining', 'mamad'];
+    for (const o of model.openings) {
+      const kind = classifyOpening(o, isBalcony);
+      const a = this.toWorld(o.x0, o.y0),
+        b = this.toWorld(o.x1, o.y1);
+      const along = o.axis === 'x' ? 'x' : 'z';
+      const width = along === 'x' ? b.x - a.x : b.y - a.y;
+      const depth = Math.max(0.08, along === 'x' ? b.y - a.y : b.x - a.x);
+      let inward: 1 | -1 = 1;
+      if (kind === 'slider' && (isBalcony(o.la) || isBalcony(o.lb))) inward = isBalcony(o.la) ? 1 : -1;
+      else if (o.outA || o.outB) inward = o.outA ? 1 : -1;
+      else inward = (typeByLabel.get(o.lb) || 'hall') === 'hall' ? -1 : 1;
+      const roomLabel = inward === 1 ? o.lb : o.la;
+      this.openingSpecs.push({
+        kind,
+        cx: (a.x + b.x) / 2,
+        cz: (a.y + b.y) / 2,
+        along,
+        width,
+        depth,
+        inward,
+        curtains: curtainRooms.includes(typeByLabel.get(roomLabel) as RoomType),
+      });
     }
 
     // floors per finish
@@ -268,6 +330,38 @@ export class TourEngine {
       cm.name = 'ceiling';
       this.ceiling.add(cm);
     }
+    // concrete slab under the flat, so the cut-away model has real thickness
+    const slabGeo = rectsGeo(ceil.map((v, i) => v | finish.deck[i]), 0, 1);
+    if (slabGeo) {
+      slabGeo.computeBoundingBox();
+      const geos: THREE.BufferGeometry[] = [];
+      for (const r of mergeRects(ceil.map((v, i) => v | finish.deck[i]), fgw, fgh)) {
+        const a = this.toWorld(r.x * fc, r.y * fc),
+          b = this.toWorld((r.x + r.w) * fc, (r.y + r.h) * fc);
+        const g = new THREE.BoxGeometry(b.x - a.x, 0.3, b.y - a.y);
+        g.translate((a.x + b.x) / 2, -0.151, (a.y + b.y) / 2);
+        geos.push(g);
+      }
+      const slab = new THREE.Mesh(mergeGeometries(geos), new THREE.MeshStandardMaterial({ color: '#cfcac1', roughness: 0.95 }));
+      slab.receiveShadow = true;
+      this.structure.add(slab);
+      slabGeo.dispose();
+    }
+    // recessed downlights, about one per 3 m²
+    const discGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.012, 20);
+    for (const r of this.rooms) {
+      if (r.type === 'balcony') continue;
+      const W = r.inner.x1 - r.inner.x0,
+        D = r.inner.z1 - r.inner.z0;
+      const nx = Math.max(1, Math.min(4, Math.round(W / 1.7))),
+        nz = Math.max(1, Math.min(4, Math.round(D / 1.7)));
+      for (let i = 0; i < nx; i++)
+        for (let j = 0; j < nz; j++) {
+          const d = new THREE.Mesh(discGeo, this.downlightMat);
+          d.position.set(r.inner.x0 + (W * (i + 0.5)) / nx, WALL_H - 0.005, r.inner.z0 + (D * (j + 0.5)) / nz);
+          this.ceiling.add(d);
+        }
+    }
 
     // sun & shadow frustum
     const sc = this.sun.shadow.camera;
@@ -294,6 +388,12 @@ export class TourEngine {
         const i = y * model.w + x;
         block[gy * fgw + gx] = !model.interior[i] || blockedPx[i] ? 1 : 0;
       }
+    for (const o of model.openings) {
+      if (classifyOpening(o, isBalcony) !== 'window') continue;
+      for (let y = Math.floor(o.y0 / navCell) - 1; y <= Math.ceil(o.y1 / navCell) + 1; y++)
+        for (let x = Math.floor(o.x0 / navCell) - 1; x <= Math.ceil(o.x1 / navCell) + 1; x++)
+          if (x >= 0 && y >= 0 && x < fgw && y < fgh) block[y * fgw + x] = 1;
+    }
     this.grid = { block, gw: fgw, gh: fgh, cell: navCell };
 
     this.applyBrief(brief, true);
@@ -385,7 +485,14 @@ export class TourEngine {
     const g = this.grid;
     if (!g) return;
     this.footprints = [];
+    this.scene.updateMatrixWorld(true);
     const box = new THREE.Box3();
+    // open door leaves stand in the room: keep the camera clear of them
+    this.openingsGroup.traverse((o) => {
+      if (!o.userData.leaf) return;
+      box.setFromObject(o);
+      this.footprints.push({ x0: box.min.x, z0: box.min.z, x1: box.max.x, z1: box.max.z });
+    });
     for (const grp of [this.furniture, this.fixtures])
       for (const o of grp.children) {
         box.setFromObject(o);
@@ -465,6 +572,7 @@ export class TourEngine {
       }
       const ceil = this.ceiling.getObjectByName('ceiling') as THREE.Mesh | undefined;
       if (ceil) (ceil.material as THREE.MeshStandardMaterial).color.set(this.style.ceiling);
+      this.buildOpenings();
       this.furnish();
       this.refreshNav();
     }
@@ -490,89 +598,163 @@ export class TourEngine {
       if (r.type === 'living') {
         if (L < 1.8 || D < 2) continue;
         const sw = Math.max(1.6, Math.min(2.4, L - 1.0));
-        add(F, this.put(buildFurniture('sofa', s, m, { w: sw }), r, a, 0, 0.5));
+        add(F, this.put(this.piece('sofa', { w: sw }), r, a, 0, 0.5));
+        const artL = this.put(this.piece('art', { w: Math.min(1.3, sw * 0.6) }), r, a, 0, 0.02);
+        artL.position.y = 1.32;
+        add(F, artL);
         const zone = Math.min(D, 4.4);
         const rw = Math.min(sw + 0.7, L - 0.3),
           rd = Math.min(2.0, zone - 1.1);
-        if (rd > 1) add(F, this.put(buildFurniture('rug', s, m, { w: rw, d: rd }), r, a, 0, 0.75 + rd / 2));
-        add(F, this.put(buildFurniture('coffeeTable', s, m), r, a, 0, 1.55));
-        if (D <= 5.4 && D >= 2.8) add(F, this.put(buildFurniture('tvUnit', s, m, { w: Math.min(1.9, L - 0.6) }), r, opp, 0, 0.23));
+        if (rd > 1) add(F, this.put(this.piece('rug', { w: rw, d: rd }), r, a, 0, 0.75 + rd / 2));
+        add(F, this.put(this.piece('coffeeTable'), r, a, 0, 1.55));
+        if (D <= 5.4 && D >= 2.8) add(F, this.put(this.piece('tvUnit', { w: Math.min(1.9, L - 0.6) }), r, opp, 0, 0.23));
         else if (D > 5.4) {
-          for (const sg of [-1, 1]) add(F, this.put(buildFurniture('armchair', s, m), r, a, sg * 0.5, 2.75, 'out'));
+          for (const sg of [-1, 1]) add(F, this.put(this.piece('armchair'), r, a, sg * 0.5, 2.75, 'out'));
           if (D - zone >= 2.4 && !has('dining') && !has('kitchen'))
-            add(F, this.put(buildFurniture('diningTable', s, m, { seats: L > 3 ? 6 : 4 }), r, a, 0, zone + (D - zone) / 2));
+            add(F, this.put(this.piece('diningTable', { seats: L > 3 ? 6 : 4 }), r, a, 0, zone + (D - zone) / 2));
         }
         if (D > 5.4 && D - zone >= 2.4 && !has('dining') && has('kitchen'))
-          add(F, this.put(buildFurniture('diningTable', s, m, { seats: L > 3 ? 6 : 4 }), r, a, 0, zone + (D - zone) / 2));
+          add(F, this.put(this.piece('diningTable', { seats: L > 3 ? 6 : 4 }), r, a, 0, zone + (D - zone) / 2));
         if (L - sw > 1.4 && D <= 5.4) {
-          const ac = this.put(buildFurniture('armchair', s, m), r, a, sw / 2 + 0.6, 1.35);
+          const ac = this.put(this.piece('armchair'), r, a, sw / 2 + 0.6, 1.35);
           ac.rotation.y -= 0.6;
           add(F, ac);
         }
-        if (L - sw > 0.7) add(F, this.put(buildFurniture('floorLamp', s, m), r, a, -(sw / 2 + 0.3), 0.3));
-        if (s.plants > 0.3) add(F, this.put(buildFurniture('plant', s, m, { w: 1.5 }), r, opp, L / 2 - 0.35, 0.35));
+        if (L - sw > 0.7) add(F, this.put(this.piece('floorLamp'), r, a, -(sw / 2 + 0.3), 0.3));
+        if (s.plants > 0.3) add(F, this.put(this.piece('plant', { w: 1.5 }), r, opp, L / 2 - 0.35, 0.35));
       } else if (r.type === 'master' || r.type === 'bedroom') {
         const bw = L >= 2.6 ? 1.6 : L >= 2.1 ? 1.4 : 0;
         if (!bw || D < 2.4) continue;
-        add(F, this.put(buildFurniture('bed', s, m, { w: bw }), r, a, 0, 1.1));
+        add(F, this.put(this.piece('bed', { w: bw }), r, a, 0, 1.1));
+        const artB = this.put(this.piece('art', { w: Math.min(1.1, bw * 0.7) }), r, a, 0, 0.02);
+        artB.position.y = 1.55;
+        add(F, artB);
         if (L >= bw + 1.1)
-          for (const sg of [-1, 1]) add(F, this.put(buildFurniture('nightstand', s, m), r, a, sg * (bw / 2 + 0.33), 0.22));
-        if (D >= 3.5) add(F, this.put(buildFurniture('wardrobe', s, m, { w: Math.min(2.4, L - 0.6) }), r, opp, 0, 0.3));
-        else if ((L - bw) / 2 >= 1.15) add(F, this.put(buildFurniture('wardrobe', s, m, { w: Math.min(2.0, D - 0.4) }), r, perp[0], 0, 0.3));
-        add(F, this.put(buildFurniture('rug', s, m, { w: Math.min(bw + 1.0, L - 0.3), d: 1.6 }), r, a, 0, 1.75));
-        if (s.plants > 0.5 && L > 3) add(F, this.put(buildFurniture('plant', s, m, { w: 1.2 }), r, a, L / 2 - 0.3, 0.3));
+          for (const sg of [-1, 1]) add(F, this.put(this.piece('nightstand'), r, a, sg * (bw / 2 + 0.33), 0.22));
+        if (D >= 3.5) add(F, this.put(this.piece('wardrobe', { w: Math.min(2.4, L - 0.6) }), r, opp, 0, 0.3));
+        else if ((L - bw) / 2 >= 1.15) add(F, this.put(this.piece('wardrobe', { w: Math.min(2.0, D - 0.4) }), r, perp[0], 0, 0.3));
+        add(F, this.put(this.piece('rug', { w: Math.min(bw + 1.0, L - 0.3), d: 1.6 }), r, a, 0, 1.75));
+        if (s.plants > 0.5 && L > 3) add(F, this.put(this.piece('plant', { w: 1.2 }), r, a, L / 2 - 0.3, 0.3));
       } else if (r.type === 'kids') {
         if (L < 1.6 || D < 2.2) continue;
-        add(F, this.put(buildFurniture('singleBed', s, m), r, a, -(L / 2) + 0.55, 1.1));
-        if (D >= 3.3) add(F, this.put(buildFurniture('desk', s, m), r, opp, 0, 0.33));
-        else if (L >= 2.8) add(F, this.put(buildFurniture('desk', s, m), r, a, L / 2 - 0.7, 0.33));
-        add(F, this.put(buildFurniture('shelf', s, m), r, perp[0], 0, 0.18));
-        add(F, this.put(buildFurniture('rug', s, m, { w: 1.4, d: 1.0 }), r, a, L / 2 - 1.0, Math.min(D - 0.8, 1.8)));
+        add(F, this.put(this.piece('singleBed'), r, a, -(L / 2) + 0.55, 1.1));
+        if (D >= 3.3) add(F, this.put(this.piece('desk'), r, opp, 0, 0.33));
+        else if (L >= 2.8) add(F, this.put(this.piece('desk'), r, a, L / 2 - 0.7, 0.33));
+        add(F, this.put(this.piece('shelf'), r, perp[0], 0, 0.18));
+        add(F, this.put(this.piece('rug', { w: 1.4, d: 1.0 }), r, a, L / 2 - 1.0, Math.min(D - 0.8, 1.8)));
       } else if (r.type === 'office' || r.type === 'mamad') {
         if (L < 1.5 || D < 1.8) continue;
-        add(F, this.put(buildFurniture('desk', s, m), r, a, 0, 0.33));
-        add(F, this.put(buildFurniture('shelf', s, m), r, perp[0], 0, 0.18));
+        add(F, this.put(this.piece('desk'), r, a, 0, 0.33));
+        add(F, this.put(this.piece('shelf'), r, perp[0], 0, 0.18));
         if (D > 2.8 && L > 2.4) {
-          const ac = this.put(buildFurniture('armchair', s, m), r, opp, L / 2 - 0.6, 0.6);
+          const ac = this.put(this.piece('armchair'), r, opp, L / 2 - 0.6, 0.6);
           add(F, ac);
         }
-        if (s.plants > 0.4) add(F, this.put(buildFurniture('plant', s, m, { w: 1.1 }), r, a, -L / 2 + 0.3, 0.3));
+        if (s.plants > 0.4) add(F, this.put(this.piece('plant', { w: 1.1 }), r, a, -L / 2 + 0.3, 0.3));
       } else if (r.type === 'dining') {
-        add(F, this.put(buildFurniture('diningTable', s, m, { seats: L > 3.2 ? 6 : 4 }), r, a, 0, D / 2));
-        if (D >= 3.6) add(F, this.put(buildFurniture('sideboard', s, m), r, a, 0, 0.22));
+        add(F, this.put(this.piece('diningTable', { seats: L > 3.2 ? 6 : 4 }), r, a, 0, D / 2));
+        if (D >= 3.6) add(F, this.put(this.piece('sideboard'), r, a, 0, 0.22));
       } else if (r.type === 'kitchen') {
         if (L >= 1.6) add(X, this.put(kitchenRun(s, m, L - 0.04), r, a, 0, 0.3));
         const pl = this.sideLen(r, perp[0]);
         if (L < 2.6 && pl.len > 2.2) add(X, this.put(kitchenRun(s, m, pl.len - 0.7, false), r, perp[0], 0.35, 0.3));
-        if (D >= 3.3) add(F, this.put(buildFurniture('diningTable', s, m, { seats: 4 }), r, a, 0, Math.max(1.9, D - 1.0)));
+        if (D >= 3.3) add(F, this.put(this.piece('diningTable', { seats: 4 }), r, a, 0, Math.max(1.9, D - 1.0)));
       } else if (r.type === 'bathroom') {
         add(X, this.put(bathSet(s, m, L), r, a, -L / 2 + Math.min(1.0, L * 0.45) / 2 + 0.05, 0.24));
         if (D > 1.8 && L > 1.4) add(X, this.put(showerGlass(m), r, opp, L / 2 - 0.5, 0.9));
       } else if (r.type === 'balcony') {
         if (Math.min(L, D) >= 1.2) {
-          const b = this.put(buildFurniture('bistroSet', s, m), r, a, 0, D / 2);
+          const b = this.put(this.piece('bistroSet'), r, a, 0, D / 2);
           if (L < D) b.rotation.y += Math.PI / 2;
           add(F, b);
         }
-        for (const sg of [-1, 1]) add(F, this.put(buildFurniture('plant', s, m, { w: 1.3 }), r, a, sg * (L / 2 - 0.3), 0.3));
+        for (const sg of [-1, 1]) add(F, this.put(this.piece('plant', { w: 1.3 }), r, a, sg * (L / 2 - 0.3), 0.3));
       } else if (r.type === 'hall') {
-        if (L >= 1.8 && D >= 1.1) add(F, this.put(buildFurniture('sideboard', s, m, { w: Math.min(1.4, L - 0.5) }), r, a, 0, 0.22));
+        if (L >= 1.8 && D >= 1.1) add(F, this.put(this.piece('sideboard', { w: Math.min(1.4, L - 0.5) }), r, a, 0, 0.22));
       }
     }
+    // curtains are styling, so they come and go with the furniture
+    const om = this.openingMatsCache;
+    if (om) for (const spec of this.openingSpecs) if (spec.curtains) this.furniture.add(buildOpening(spec, om, WALL_H, 'curtains'));
     // tag lamp shades for evening glow
     this.furniture.traverse((o) => {
       if (o.userData.lamp) (o as THREE.Mesh).material = this.mats.lampShade;
     });
   }
 
+  private library = new Map<FurnitureKind, { obj: THREE.Object3D; rotate: number }>();
+
+  /** Real 3D models (GLB) uploaded by the user replace the procedural piece of that kind. */
+  setLibrary(lib: Map<FurnitureKind, { obj: THREE.Object3D; rotate: number }>) {
+    this.library = lib;
+    if (this.model) {
+      this.furnish();
+      this.refreshNav();
+      this.furniture.visible = this.brief?.furnish ?? true;
+    }
+  }
+
+  private piece(kind: FurnitureKind, opts: { w?: number; d?: number; seats?: number } = {}) {
+    const lib = this.library.get(kind);
+    if (!lib) return buildFurniture(kind, this.style, this.mats, opts);
+    const holder = new THREE.Group();
+    const obj = lib.obj.clone(true);
+    obj.rotation.y = (lib.rotate * Math.PI) / 180;
+    const wrap = new THREE.Group();
+    wrap.add(obj);
+    const box = new THREE.Box3().setFromObject(wrap);
+    const size = box.getSize(new THREE.Vector3());
+    const [fw, fd] = FOOTPRINT[kind];
+    const targetW = kind === 'rug' ? opts.w || fw : kind === 'sofa' || kind === 'tvUnit' || kind === 'sideboard' || kind === 'wardrobe' ? opts.w || fw : fw;
+    const k = Math.min(targetW / Math.max(size.x, 0.01), (kind === 'rug' ? opts.d || fd : fd * 1.6) / Math.max(size.z, 0.01));
+    wrap.scale.setScalar(k);
+    const b2 = new THREE.Box3().setFromObject(wrap);
+    const c = b2.getCenter(new THREE.Vector3());
+    wrap.position.set(-c.x, -b2.min.y, -c.z);
+    wrap.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+        o.userData.libraryAsset = true;
+      }
+    });
+    holder.add(wrap);
+    return holder;
+  }
+
+  private openingMatsCache: ReturnType<typeof openingMats> | null = null;
+
+  private buildOpenings() {
+    this.clear(this.openingsGroup);
+    this.clear(this.windowLights);
+    const walls = this.structure.getObjectByName('walls') as THREE.Mesh | undefined;
+    const wallMat = (walls?.material as THREE.Material) || new THREE.MeshStandardMaterial({ color: this.style.wall });
+    const om = openingMats(this.style, this.mats, wallMat);
+    this.openingMatsCache = om;
+    for (const spec of this.openingSpecs) this.openingsGroup.add(buildOpening(spec, om, WALL_H));
+    // daylight through the glass: soft area lights at the biggest openings
+    const lit = this.openingSpecs.filter((o) => glazing(o.kind)).sort((a, b) => b.width - a.width).slice(0, 8);
+    for (const o of lit) {
+      const gz = glazing(o.kind)!;
+      const h = gz.y1 - gz.y0;
+      const light = new THREE.RectAreaLight('#fff4e6', 5.5, o.width * 0.9, h);
+      const n = o.along === 'x' ? new THREE.Vector3(0, 0, o.inward) : new THREE.Vector3(o.inward, 0, 0);
+      light.position.set(o.cx, gz.y0 + h / 2, o.cz).addScaledVector(n, o.depth / 2 + 0.03);
+      light.lookAt(light.position.clone().add(n));
+      this.windowLights.add(light);
+    }
+  }
+
   private setLighting(light: 'day' | 'evening') {
     this.clear(this.roomLights);
     const evening = light === 'evening';
-    this.hemi.intensity = evening ? 0.18 : 1.1;
-    this.sun.intensity = evening ? 0 : 2.4;
-    this.scene.environmentIntensity = evening ? 0.12 : 0.55;
-    this.renderer.toneMappingExposure = evening ? 1.25 : 1.05;
+    this.hemi.intensity = evening ? 0.15 : 0.75;
+    this.sun.intensity = evening ? 0 : 2.6;
+    this.scene.environmentIntensity = evening ? 0.1 : 0.5;
+    this.renderer.toneMappingExposure = evening ? 1.3 : 1.15;
     this.mats.lampShade.emissiveIntensity = evening ? 2.2 : 0;
+    this.windowLights.visible = !evening;
+    this.downlightMat.emissiveIntensity = evening ? 4 : 0.6;
     if (evening) {
       const rooms = [...this.rooms].sort((a, b) => b.areaM2 - a.areaM2).slice(0, 8);
       for (const r of rooms) {
@@ -874,8 +1056,15 @@ export class TourEngine {
     const w = this.container.clientWidth || 800,
       h = this.container.clientHeight || 500;
     this.renderer.setSize(w, h);
+    this.composer?.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer?.setSize(w, h);
     this.camera.aspect = w / h;
     this.updateFov();
+  }
+
+  private draw() {
+    if (this.hq && this.composer) this.composer.render();
+    else this.renderer.render(this.scene, this.camera);
   }
 
   private loop(now: number) {
@@ -904,7 +1093,7 @@ export class TourEngine {
       this.controls.update();
       info.labels = this.projectLabels();
     }
-    this.renderer.render(this.scene, this.camera);
+    this.draw();
     this.onFrame?.(info);
   }
 
@@ -926,6 +1115,8 @@ export class TourEngine {
     this.controls.enabled = false;
     this.renderer.setPixelRatio(1);
     this.renderer.setSize(w, h, false);
+    this.composer?.setPixelRatio(1);
+    this.composer?.setSize(w, h);
     this.camera.aspect = w / h;
     this.updateFov();
     return this.renderer.domElement;
@@ -934,7 +1125,7 @@ export class TourEngine {
   renderAt(t: number) {
     const p = this.poseAt(t);
     this.ceiling.visible = !p.overview;
-    this.renderer.render(this.scene, this.camera);
+    this.draw();
     return { room: p.room?.name || '', area: p.room?.areaM2 || 0, fade: this.fadeAt(t) };
   }
 
@@ -947,7 +1138,7 @@ export class TourEngine {
   }
 
   snapshot(type = 'image/jpeg') {
-    this.renderer.render(this.scene, this.camera);
+    this.draw();
     return this.renderer.domElement.toDataURL(type, 0.92);
   }
 
@@ -964,7 +1155,63 @@ export class TourEngine {
     this.clear(this.structure);
     this.clear(this.furniture);
     this.clear(this.fixtures);
+    this.clear(this.openingsGroup);
+    this.composer?.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
+}
+
+/** Neighbouring buildings and trees seen through the windows, as if the flat were a few floors up. */
+function cityContext() {
+  const g = new THREE.Group();
+  const groundY = -12;
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), new THREE.MeshStandardMaterial({ color: '#cfc8ba', roughness: 1 }));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = groundY;
+  g.add(ground);
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const facade = ['#e9e4da', '#ddd6c9', '#f1eee7', '#d4cdc0', '#e4ddd0'];
+  const winTex = (() => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const x = c.getContext('2d')!;
+    x.fillStyle = '#fff';
+    x.fillRect(0, 0, 128, 128);
+    x.fillStyle = '#8f9aa1';
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) x.fillRect(8 + i * 30, 10 + j * 30, 18, 16);
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
+  for (let i = 0; i < 26; i++) {
+    const ang = (i / 26) * Math.PI * 2 + rnd() * 0.2;
+    const dist = 34 + rnd() * 40;
+    const w = 12 + rnd() * 16,
+      d = 10 + rnd() * 12,
+      h = 14 + rnd() * 26;
+    const tex = winTex.clone();
+    tex.needsUpdate = true;
+    tex.repeat.set(w / 6, h / 6);
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(w, h, d),
+      new THREE.MeshStandardMaterial({ color: facade[i % facade.length], map: tex, roughness: 0.9 }),
+    );
+    m.position.set(Math.sin(ang) * dist, groundY + h / 2, Math.cos(ang) * dist);
+    m.rotation.y = ang;
+    g.add(m);
+  }
+  const leaf = new THREE.MeshStandardMaterial({ color: '#6f8457', roughness: 1, flatShading: true });
+  for (let i = 0; i < 30; i++) {
+    const ang = rnd() * Math.PI * 2;
+    const dist = 26 + rnd() * 30;
+    const s = 1.8 + rnd() * 1.8;
+    const t = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 1), leaf);
+    t.position.set(Math.sin(ang) * dist, groundY + 2 + s, Math.cos(ang) * dist);
+    t.scale.y = 1.2;
+    g.add(t);
+  }
+  return g;
 }

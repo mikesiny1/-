@@ -114,6 +114,23 @@ export default function ProjectView({ id, step }: { id: string; step: string }) 
         <div className="save">{saved ? 'כל השינויים נשמרו' : 'שומר…'}</div>
       </aside>
       <main className="main">
+        <div className="stepbar">
+          <button className="btn quiet sm" disabled={idx === 0} onClick={() => go(`/p/${p.id}/${steps[idx - 1].id}`)}>
+            → {idx > 0 ? steps[idx - 1].name : 'הקודם'}
+          </button>
+          <div className="progress" aria-label={`שלב ${idx + 1} מתוך ${steps.length}`}>
+            <i style={{ width: `${((idx + 1) / steps.length) * 100}%` }} />
+          </div>
+          <span className="small muted">
+            שלב {idx + 1} מתוך {steps.length}
+          </span>
+          <a className="btn quiet sm" href={`#/present/${p.id}`} title="תצוגה נקייה להצגה ללקוח">
+            מצגת ללקוח
+          </a>
+          <button className="btn quiet sm" disabled={idx === steps.length - 1} onClick={next}>
+            {idx < steps.length - 1 ? steps[idx + 1].name : 'הבא'} ←
+          </button>
+        </div>
         {cur.id === 'details' && <DetailsStep {...props} />}
         {cur.id === 'materials' && <MaterialsStep {...props} />}
         {cur.id === 'brief' && <BriefStep {...props} />}

@@ -267,6 +267,7 @@ export const FURNITURE_NAMES: Record<FurnitureKind, string> = {
   singleBed: 'מיטת יחיד',
   bistroSet: 'פינת ישיבה למרפסת',
   shelf: 'כוננית',
+  art: 'תמונה לקיר',
 };
 
 export const HOUSEHOLDS: { id: Household; name: string; hint: string }[] = [

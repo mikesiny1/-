@@ -65,6 +65,8 @@ export interface PlanSettings {
   calibrated: boolean;
   /** thin drawn lines (glazing, door leaves) also separate rooms */
   thinLines?: boolean;
+  /** close double-line (unfilled) walls up to this thickness, metres */
+  fillOutline?: number;
 }
 
 export type FurnitureKind =
@@ -83,7 +85,8 @@ export type FurnitureKind =
   | 'sideboard'
   | 'singleBed'
   | 'bistroSet'
-  | 'shelf';
+  | 'shelf'
+  | 'art';
 
 export interface StagedItem {
   id: string;

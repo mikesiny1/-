@@ -24,6 +24,7 @@ const KINDS: FurnitureKind[] = [
   'bistroSet',
   'floorLamp',
   'plant',
+  'art',
 ];
 
 /** Designer's starting point per room type — positions are relative to the photo. */

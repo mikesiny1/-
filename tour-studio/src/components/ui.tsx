@@ -169,7 +169,7 @@ export function Drop(props: { accept: string; multiple?: boolean; icon: string; 
       onDrop={(e) => {
         e.preventDefault();
         setOver(false);
-        const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
+        const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/') || f.type === 'application/pdf');
         if (files.length) props.onFiles(files);
       }}
     >
