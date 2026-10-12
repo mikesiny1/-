@@ -49,7 +49,7 @@ export async function getRaster(blobId: string): Promise<Raster | null> {
 }
 
 export function modelFor(blobId: string, r: Raster, s: PlanSettings): PlanModel {
-  const key = blobId + JSON.stringify({ ...s, rooms: undefined });
+  const key = blobId + JSON.stringify({ ...s, rooms: s.rooms.filter((r) => r.rect).map((r) => r.rect) });
   if (modelCache?.key === key) return modelCache.model;
   const model = analyzePlan(r, s);
   modelCache = { key, model };

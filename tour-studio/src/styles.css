@@ -1525,3 +1525,10 @@ button {
     bottom: 64px;
   }
 }
+
+.dragrect {
+  position: absolute;
+  border: 2px dashed var(--ink);
+  background: rgba(138, 90, 59, 0.12);
+  pointer-events: none;
+}

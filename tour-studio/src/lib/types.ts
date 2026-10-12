@@ -48,6 +48,8 @@ export interface PlanRoom {
   /** seed point in working-image pixels */
   sx: number;
   sy: number;
+  /** manually outlined room (working px) – used when the plan reader could not find it */
+  rect?: { x0: number; y0: number; x1: number; y1: number };
 }
 
 export interface PlanSettings {

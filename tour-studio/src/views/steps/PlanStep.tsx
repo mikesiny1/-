@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, Range, useToast } from '../../components/ui';
 import { loadImage, uid } from '../../lib/db';
-import { autoRooms, regionAt, type PlanModel, type Raster } from '../../lib/plan';
+import { autoRooms, regionAt, roomRectAt, type PlanModel, type Raster } from '../../lib/plan';
 import { getRaster, modelFor } from '../../lib/project';
 import { ROOM_TYPES, roomName } from '../../lib/styles';
 import type { PlanRoom, PlanSettings, RoomType } from '../../lib/types';
@@ -19,6 +19,7 @@ export default function PlanStep({ p, update, next }: StepProps) {
   const [addType, setAddType] = useState<RoomType>('bedroom');
   const [cal, setCal] = useState<{ a?: [number, number]; b?: [number, number] }>({});
   const [calLen, setCalLen] = useState('');
+  const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const toast = useToast();
   const s = p.plan;
@@ -30,7 +31,7 @@ export default function PlanStep({ p, update, next }: StepProps) {
   }, [p.planBlobId]);
 
   // analysis (debounced)
-  const analysisKey = s ? JSON.stringify([s.threshold, s.minWall, s.doorGap, s.pxPerM]) : '';
+  const analysisKey = s ? JSON.stringify([s.threshold, s.minWall, s.doorGap, s.pxPerM, s.rooms.map((r) => r.rect || 0)]) : '';
   useEffect(() => {
     if (!raster || !s || !p.planBlobId) return;
     const t = setTimeout(() => setModel(modelFor(p.planBlobId!, raster, s)), 120);
@@ -113,24 +114,49 @@ export default function PlanStep({ p, update, next }: StepProps) {
 
   if (!s || !p.planBlobId) return <p className="muted">לא הועלתה תוכנית.</p>;
 
-  const toRaster = (e: React.MouseEvent) => {
+  const toRaster = (e: React.PointerEvent) => {
     const c = canvas.current!;
     const r = c.getBoundingClientRect();
     return [((e.clientX - r.left) / r.width) * c.width, ((e.clientY - r.top) / r.height) * c.height] as [number, number];
   };
 
-  const onClick = (e: React.MouseEvent) => {
-    if (!model) return;
+  const addRoom = (x: number, y: number, rect?: PlanRoom['rect']) => {
+    const room: PlanRoom = { id: uid(), type: addType, name: '', sx: x, sy: y, rect };
+    setPlan((pl) => ({ ...pl, rooms: [...pl.rooms, room] }));
+    setMode('view');
+  };
+
+  const onDown = (e: React.PointerEvent) => {
+    if (mode !== 'add' || !model) return;
     const [x, y] = toRaster(e);
-    if (mode === 'add') {
-      const reg = regionAt(model, x, y);
-      if (!reg) {
-        toast('הנקודה נפלה על קיר או מחוץ לדירה — נסו בתוך החדר');
+    setDrag({ x0: x, y0: y, x1: x, y1: y });
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onMove = (e: React.PointerEvent) => {
+    if (!drag) return;
+    const [x, y] = toRaster(e);
+    setDrag({ ...drag, x1: x, y1: y });
+  };
+
+  const onUp = (e: React.PointerEvent) => {
+    if (!model || !raster) return;
+    const [x, y] = toRaster(e);
+    if (mode === 'add' && drag) {
+      setDrag(null);
+      const rect = { x0: Math.min(drag.x0, x), y0: Math.min(drag.y0, y), x1: Math.max(drag.x0, x), y1: Math.max(drag.y0, y) };
+      const minPx = model.pxPerM * 0.8;
+      if (rect.x1 - rect.x0 > minPx && rect.y1 - rect.y0 > minPx) {
+        addRoom((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2, rect);
         return;
       }
-      const room: PlanRoom = { id: uid(), type: addType, name: '', sx: x, sy: y };
-      setPlan((pl) => ({ ...pl, rooms: [...pl.rooms, room] }));
-      setMode('view');
+      if (regionAt(model, x, y)) return addRoom(x, y);
+      const found = roomRectAt(raster, model, s, x, y);
+      if (found) {
+        addRoom((found.x0 + found.x1) / 2, (found.y0 + found.y1) / 2, found);
+        toast('החדר זוהה לפי הקירות סביבו');
+        return;
+      }
+      toast('לא מצאתי קירות סגורים סביב הנקודה. גררו מלבן על שטח החדר.');
     } else if (mode === 'calibrate') {
       if (!cal.a || cal.b) setCal({ a: [x, y] });
       else setCal({ ...cal, b: [x, y] });
@@ -194,7 +220,7 @@ export default function PlanStep({ p, update, next }: StepProps) {
               </select>
             )}
             <span className="small muted">
-              {mode === 'add' && 'לחצו בתוך החדר בתוכנית'}
+              {mode === 'add' && 'לחצו בתוך החדר, או גררו מלבן על שטח החדר'}
               {mode === 'calibrate' && !cal.b && 'לחצו על שתי נקודות שהמרחק ביניהן ידוע (למשל קו מידה)'}
             </span>
           </div>
@@ -208,8 +234,19 @@ export default function PlanStep({ p, update, next }: StepProps) {
               </button>
             </div>
           )}
-          <div className={'planstage' + (mode !== 'view' ? ' adding' : '')} onClick={onClick}>
+          <div className={'planstage' + (mode !== 'view' ? ' adding' : '')} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} style={{ touchAction: mode === 'view' ? 'auto' : 'none' }}>
             <canvas ref={canvas} />
+            {drag && raster && (
+              <span
+                className="dragrect"
+                style={{
+                  left: `${(Math.min(drag.x0, drag.x1) / raster.w) * 100}%`,
+                  top: `${(Math.min(drag.y0, drag.y1) / raster.h) * 100}%`,
+                  width: `${(Math.abs(drag.x1 - drag.x0) / raster.w) * 100}%`,
+                  height: `${(Math.abs(drag.y1 - drag.y0) / raster.h) * 100}%`,
+                }}
+              />
+            )}
             {raster &&
               s.rooms.map((r, i) => (
                 <span key={r.id} className="pin" style={{ right: `${100 - (r.sx / raster.w) * 100}%`, top: `${(r.sy / raster.h) * 100}%`, background: ROOM_COLORS[i % ROOM_COLORS.length] }}>
@@ -302,6 +339,8 @@ export default function PlanStep({ p, update, next }: StepProps) {
                 onChange={(v) => setPlan((pl) => ({ ...pl, doorGap: v }))}
               />
               <div className="small muted">
+                אם הקירות בתוכנית אפורים ולא מזוהים — הגדילו את הרגישות.
+                <br />
                 קנה מידה: {s.pxPerM.toFixed(1)} פיקסלים למטר {s.calibrated ? '· מכויל ידנית' : '· הוערך לפי שטח הדירה'}
               </div>
             </div>

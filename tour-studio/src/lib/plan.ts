@@ -395,6 +395,21 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
     frontier = next;
   }
 
+  // rooms the user outlined by hand win over automatic segmentation
+  let nextLabel = 0;
+  for (const l of labels) if (l > nextLabel) nextLabel = l;
+  for (const room of s.rooms) {
+    const rc = room.rect;
+    if (!rc) continue;
+    const L = ++nextLabel;
+    for (let y = Math.max(0, Math.floor(rc.y0)); y <= Math.min(h - 1, Math.ceil(rc.y1)); y++)
+      for (let x = Math.max(0, Math.floor(rc.x0)); x <= Math.min(w - 1, Math.ceil(rc.x1)); x++) {
+        const i = y * w + x;
+        interior[i] = 1;
+        if (!wall[i]) labels[i] = L;
+      }
+  }
+
   // wall thickness samples
   const thickness = measureWallThickness(wall, w, h);
 
@@ -688,6 +703,37 @@ export function autoRooms(m: PlanModel, declaredRooms: number): PlanRoom[] {
     else push(r, r.touchesOutside ? 'balcony' : 'office', '');
   }
   return out;
+}
+
+/**
+ * For a click where no room was detected: flood the free space around the point, bounded by
+ * walls (doorways sealed) and thin lines. Returns the room's rectangle, or null if it leaks out.
+ */
+export function roomRectAt(r: Raster, m: PlanModel, s: PlanSettings, x: number, y: number): Rect | null {
+  const { w, h } = m;
+  const doorR = Math.max(1, Math.round((s.doorGap * m.pxPerM) / 2));
+  const sealed = dilate(m.wall, w, h, doorR);
+  const sep = separators(r, Math.min(215, s.threshold + 60));
+  const pass = new Uint8Array(w * h);
+  for (let i = 0; i < pass.length; i++) pass[i] = sealed[i] || sep[i] ? 0 : 1;
+  // nearest passable pixel to the click
+  let seed = -1;
+  for (let rad = 0; rad < 40 && seed < 0; rad += 2)
+    for (let dy = -rad; dy <= rad && seed < 0; dy += 2)
+      for (let dx = -rad; dx <= rad && seed < 0; dx += 2) {
+        const px = Math.round(x) + dx,
+          py = Math.round(y) + dy;
+        if (px >= 0 && py >= 0 && px < w && py < h && pass[py * w + px]) seed = py * w + px;
+      }
+  if (seed < 0) return null;
+  const reg = floodFrom(pass, w, h, [seed]);
+  const b = bboxOf(reg, w, h);
+  let area = 0;
+  for (const v of reg) area += v;
+  const touchesEdge = b.x0 <= 1 || b.y0 <= 1 || b.x1 >= w - 2 || b.y1 >= h - 2;
+  const m2 = area / (m.pxPerM * m.pxPerM);
+  if (touchesEdge || m2 < 0.4 || area > w * h * 0.5) return null;
+  return { x0: Math.max(0, b.x0 - doorR), y0: Math.max(0, b.y0 - doorR), x1: Math.min(w - 1, b.x1 + doorR), y1: Math.min(h - 1, b.y1 + doorR) };
 }
 
 export function defaultPlanSettings(): PlanSettings {

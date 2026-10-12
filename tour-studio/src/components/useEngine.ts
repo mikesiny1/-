@@ -26,7 +26,7 @@ export function useEngine(ref: RefObject<HTMLDivElement>, p: Project, enabled = 
     };
   }, [enabled, ref]);
 
-  const roomsKey = JSON.stringify(p.plan?.rooms.map((r) => [r.type, Math.round(r.sx), Math.round(r.sy), r.name]));
+  const roomsKey = JSON.stringify(p.plan?.rooms.map((r) => [r.type, Math.round(r.sx), Math.round(r.sy), r.name, r.rect || 0]));
   const settingsKey = p.plan ? [p.plan.threshold, p.plan.minWall, p.plan.doorGap, p.plan.pxPerM].join('|') : '';
 
   useEffect(() => {
