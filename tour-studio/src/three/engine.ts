@@ -101,6 +101,7 @@ export class TourEngine {
   private floorMeshes: THREE.Object3D[] = [];
   private resizeObs: ResizeObserver;
   private dragging: { x: number; y: number; moved: boolean } | null = null;
+  private city: THREE.Group;
   private openingsGroup = new THREE.Group();
   private windowLights = new THREE.Group();
   private openingSpecs: OpeningSpec[] = [];
@@ -134,7 +135,8 @@ export class TourEngine {
       new THREE.MeshBasicMaterial({ map: skyTexture(), side: THREE.BackSide, fog: false }),
     );
     this.scene.add(sky);
-    this.scene.add(cityContext());
+    this.city = cityContext();
+    this.scene.add(this.city);
 
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -905,6 +907,7 @@ export class TourEngine {
   setMode(mode: Mode) {
     this.mode = mode;
     this.controls.enabled = mode === 'doll';
+    this.city.visible = mode !== 'doll';
     if (mode === 'doll') {
       this.ceiling.visible = false;
       this.camera.position.set(this.extent * 0.55, this.extent * 1.05 + 2, this.extent * 0.75);
@@ -1083,6 +1086,7 @@ export class TourEngine {
       }
       const p = this.poseAt(this.t);
       this.ceiling.visible = !p.overview;
+      this.city.visible = !p.overview;
       info = { t: this.t, duration: this.duration, room: p.room?.name || '', area: p.room?.areaM2 || 0, fade: this.fadeAt(this.t) };
     } else if (this.mode === 'walk') {
       this.stepWalk(dt);
@@ -1125,6 +1129,7 @@ export class TourEngine {
   renderAt(t: number) {
     const p = this.poseAt(t);
     this.ceiling.visible = !p.overview;
+    this.city.visible = !p.overview;
     this.draw();
     return { room: p.room?.name || '', area: p.room?.areaM2 || 0, fade: this.fadeAt(t) };
   }

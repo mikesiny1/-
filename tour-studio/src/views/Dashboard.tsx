@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { go } from '../App';
+import { go, useBrand } from '../App';
 import { blobUrl, deleteProject, listProjects, saveProject } from '../lib/db';
 import { factsLine, priceLine } from '../lib/overlay';
 import { createDemoProject, newProject } from '../lib/project';
@@ -28,6 +28,7 @@ export default function Dashboard() {
   const [busy, setBusy] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
   const toast = useToast();
+  const { brand } = useBrand();
 
   const load = () => listProjects().then(setItems);
   useEffect(() => {
@@ -68,6 +69,15 @@ export default function Dashboard() {
           <Icon name="plus" /> נכס חדש
         </button>
       </div>
+
+      {!brand.agentName && !brand.agencyName && (
+        <div className="notice row" style={{ marginTop: 20, justifyContent: 'space-between' }}>
+          <span>שם המשרד, הסוכן והטלפון נצרבים בכל סרטון ובכל הודעה ללקוח. כדאי להשלים אותם לפני הפרסום הראשון.</span>
+          <a className="btn ghost sm" href="#/settings">
+            השלמת פרופיל
+          </a>
+        </div>
+      )}
 
       {items.length > 0 && (
         <div className="kpis">

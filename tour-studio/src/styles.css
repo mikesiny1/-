@@ -1561,9 +1561,13 @@ button {
   place-items: center;
   border-radius: 2px;
 }
+.libthumb {
+  overflow: hidden;
+}
 .libthumb img {
-  max-width: 90%;
-  max-height: 90%;
+  width: 90%;
+  height: 90%;
+  object-fit: contain;
 }
 .libbody {
   display: flex;
