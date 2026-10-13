@@ -121,67 +121,86 @@ function drawPhoto(g: CanvasRenderingContext2D, W: number, H: number, ex: Exteri
   return { ax, ay };
 }
 
-/** A black leather glove, index finger pointing at (tx, ty). */
+/** A black leather glove, index finger pointing at (tx, ty). Drawn in a local frame where the
+ *  fingertip is the origin and the forearm runs off along +x. */
 export function drawHand(g: CanvasRenderingContext2D, tx: number, ty: number, scale: number, alpha: number, t: number) {
   if (alpha <= 0.01) return;
   g.save();
   g.globalAlpha = alpha;
-  // the arm comes in from the lower right; a breath of movement
   const bob = Math.sin(t * 2.4) * 4 * scale;
-  g.translate(tx + 18 * scale, ty + 22 * scale + bob);
-  g.rotate(Math.atan2(1, 0.62));
-  g.scale(scale, scale);
-  g.shadowColor = 'rgba(0,0,0,0.45)';
-  g.shadowBlur = 40;
-  g.shadowOffsetY = 18;
-  const leather = g.createLinearGradient(0, -60, 0, 90);
-  leather.addColorStop(0, '#3a3c40');
-  leather.addColorStop(0.35, '#17181a');
-  leather.addColorStop(1, '#070708');
+  g.translate(tx + 10 * scale, ty + 14 * scale + bob);
+  // the arm comes in from the lower right, a little foreshortened
+  g.rotate(Math.atan2(1, 0.7));
+  g.scale(scale * 1.25, scale * 1.25);
+
+  const hand = new Path2D();
+  hand.moveTo(2, -20);
+  hand.bezierCurveTo(-14, -20, -16, 20, 2, 20); // fingertip
+  hand.bezierCurveTo(50, 22, 95, 24, 122, 26); // underside of the index finger
+  // three curled fingers tucked under, knuckle by knuckle
+  hand.bezierCurveTo(118, 44, 132, 66, 160, 66);
+  hand.bezierCurveTo(168, 82, 196, 88, 210, 80);
+  hand.bezierCurveTo(222, 94, 252, 94, 262, 80);
+  hand.bezierCurveTo(282, 86, 302, 70, 300, 50);
+  // heel of the hand into the wrist
+  hand.bezierCurveTo(318, 60, 340, 62, 360, 58);
+  hand.lineTo(760, 86); // forearm, underside
+  hand.lineTo(760, -62);
+  hand.lineTo(360, -52); // forearm, top
+  // back of the hand, rounded over the knuckles
+  hand.bezierCurveTo(320, -66, 262, -70, 222, -62);
+  // thumb lying along the side, tip just behind the index knuckle
+  hand.bezierCurveTo(200, -64, 160, -54, 134, -40);
+  hand.bezierCurveTo(118, -32, 112, -24, 124, -22);
+  hand.bezierCurveTo(90, -21, 45, -20, 2, -20);
+  hand.closePath();
+
+  g.shadowColor = 'rgba(0,0,0,0.5)';
+  g.shadowBlur = 46;
+  g.shadowOffsetY = 22;
+  const leather = g.createLinearGradient(0, -70, 0, 95);
+  leather.addColorStop(0, '#46484d');
+  leather.addColorStop(0.28, '#1d1e21');
+  leather.addColorStop(0.75, '#0b0c0d');
+  leather.addColorStop(1, '#050506');
   g.fillStyle = leather;
-  const rr = (x: number, y: number, w: number, h: number, r: number) => {
-    g.beginPath();
-    g.roundRect(x, y, w, h, r);
-    g.fill();
-  };
-  // forearm and cuff
-  rr(300, -42, 520, 130, 52);
-  // fist
-  rr(118, -46, 220, 128, 50);
-  // curled fingers (knuckles)
-  for (const [x, y] of [
-    [150, 52],
-    [196, 62],
-    [244, 64],
-  ]) {
-    g.beginPath();
-    g.ellipse(x, y, 34, 26, 0.2, 0, Math.PI * 2);
-    g.fill();
-  }
-  // thumb along the side
-  g.beginPath();
-  g.ellipse(170, -44, 62, 22, -0.22, 0, Math.PI * 2);
-  g.fill();
-  // index finger, pointing
-  rr(-6, -20, 160, 38, 19);
+  g.fill(hand);
   g.shadowColor = 'transparent';
-  // leather sheen and seams
-  g.strokeStyle = 'rgba(255,255,255,0.16)';
+
+  g.save();
+  g.clip(hand);
+  // soft light along the back of the hand and the finger
+  const sheen = g.createLinearGradient(0, -60, 0, 10);
+  sheen.addColorStop(0, 'rgba(255,255,255,0.18)');
+  sheen.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = sheen;
+  g.fillRect(-20, -80, 800, 80);
+  // creases between the curled fingers, thumb edge, knuckle and cuff seams
+  g.strokeStyle = 'rgba(0,0,0,0.65)';
   g.lineWidth = 3;
   g.beginPath();
-  g.moveTo(10, -14);
-  g.lineTo(140, -16);
-  g.moveTo(130, -38);
-  g.quadraticCurveTo(220, -52, 320, -36);
+  g.moveTo(158, 30);
+  g.quadraticCurveTo(160, 52, 163, 66);
+  g.moveTo(207, 36);
+  g.quadraticCurveTo(208, 60, 210, 80);
+  g.moveTo(256, 38);
+  g.quadraticCurveTo(258, 60, 262, 80);
+  g.moveTo(132, -36);
+  g.quadraticCurveTo(190, -34, 226, -52);
   g.stroke();
-  g.strokeStyle = 'rgba(255,255,255,0.07)';
-  g.lineWidth = 2;
+  g.strokeStyle = 'rgba(255,255,255,0.13)';
+  g.lineWidth = 2.5;
   g.beginPath();
-  g.moveTo(330, -40);
-  g.lineTo(330, 86);
-  g.moveTo(350, -40);
-  g.lineTo(350, 86);
+  g.moveTo(12, -15);
+  g.lineTo(118, -18);
+  g.moveTo(232, -60);
+  g.quadraticCurveTo(280, -66, 340, -54);
+  for (const x of [372, 392]) {
+    g.moveTo(x, -54);
+    g.lineTo(x + 6, 62);
+  }
   g.stroke();
+  g.restore();
   g.restore();
 }
 

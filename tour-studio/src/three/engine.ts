@@ -1435,29 +1435,41 @@ export class TourEngine {
       best = { c: lv.clone().addScaledVector(n, -0.5), n, w: 1 };
     }
     const out = best.c.clone().addScaledVector(best.n, -1.8);
-    const inn = this.reach(best.c.clone().addScaledVector(best.n, 0.3), best.c.clone().addScaledVector(best.n, 1.3));
-    const lf = new THREE.Vector2(living.focus.x, living.focus.z);
-    const lEnd = this.reach(inn, inn.clone().add(lf.clone().sub(inn).normalize().multiplyScalar(Math.min(2.6, Math.max(0.6, inn.distanceTo(lf) - 1.4)))));
+    const inn = this.reach(best.c.clone().addScaledVector(best.n, 0.3), best.c.clone().addScaledVector(best.n, 1.3), 0.15);
+    /** the first `len` metres of a walk */
+    const head = (pts: THREE.Vector2[], len: number) => {
+      const o = [pts[0]];
+      let acc = 0;
+      for (let i = 1; i < pts.length && acc < len; i++) {
+        const d = pts[i].distanceTo(pts[i - 1]);
+        if (acc + d > len) {
+          o.push(pts[i - 1].clone().lerp(pts[i], (len - acc) / d));
+          break;
+        }
+        acc += d;
+        o.push(pts[i]);
+      }
+      return o.length > 1 ? o : [pts[0], pts[0].clone().add(new THREE.Vector2(0.01, 0))];
+    };
 
-    type Seg = { pts: THREE.Vector2[]; look: 'ahead' | 'normal' | THREE.Vector3 };
+    type Seg = { pts: THREE.Vector2[]; look: 'ahead' | 'normal' | THREE.Vector3; pan?: number };
+    const lglide = head(this.walkPath(inn, lv), 1.4);
     const segs: Seg[] = [
       { pts: [out, inn], look: 'normal' },
-      { pts: [inn, lEnd], look: living.focus },
+      { pts: lglide, look: living.focus, pan: 0.35 },
     ];
     const names = [living.name];
-    let cur = lEnd;
+    let cur = lglide[lglide.length - 1];
     const visit = (r: EngineRoom) => {
       const v = new THREE.Vector2(r.view.x, r.view.z);
       const f = new THREE.Vector2(r.focus.x, r.focus.z);
       segs.push({ pts: this.walkPath(cur, v), look: 'ahead' });
-      // glide in close to the focus (bed, island), for material details
-      const close = this.reach(v, v.clone().add(f.clone().sub(v).normalize().multiplyScalar(Math.max(0.4, v.distanceTo(f) - 1.05))));
-      // and drift sideways around it
-      const side = close.clone().sub(f).rotateAround(new THREE.Vector2(), 0.45).add(f);
-      const end = this.reach(close, side, 0.3);
-      segs.push({ pts: [v, close, end], look: r.focus });
+      // from the photographer's viewpoint, ease in toward the focus (bed, island) for the material details
+      const close = this.reach(v, v.clone().add(f.clone().sub(v).normalize().multiplyScalar(Math.max(0.3, Math.min(1.6, v.distanceTo(f) - 1.0)))), 0.15);
+      const pts = close.distanceTo(v) > 0.25 ? [v, v.clone().lerp(close, 0.5), close] : [v, v.clone().add(new THREE.Vector2(0.01, 0))];
+      segs.push({ pts, look: r.focus, pan: 0.45 });
       names.push(r.name);
-      cur = end;
+      cur = pts[pts.length - 1];
     };
     if (bed) visit(bed);
     if (kitchen && kitchen !== living) visit(kitchen);
@@ -1469,7 +1481,8 @@ export class TourEngine {
     for (const sg of segs) {
       const curve = sg.pts.length > 2 ? new THREE.SplineCurve(sg.pts) : new THREE.LineCurve(sg.pts[0], sg.pts[1]);
       const len = Math.max(step, curve.getLength());
-      const n = Math.max(2, Math.round(len / step));
+      // a glide always gets enough samples to carry its slow pan, even when it barely moves
+      const n = Math.max(sg.pan ? 40 : 2, Math.round(len / step));
       for (let i = pts.length ? 1 : 0; i <= n; i++) {
         const u = i / n;
         const p = curve.getPointAt(u);
@@ -1482,7 +1495,7 @@ export class TourEngine {
         } else {
           const f = sg.look;
           const d = Math.hypot(f.x - p.x, f.z - p.y);
-          yaw = Math.atan2(f.x - p.x, f.z - p.y);
+          yaw = Math.atan2(f.x - p.x, f.z - p.y) + (sg.pan || 0) * (u - 0.5);
           pitch = -Math.max(0.06, Math.min(0.42, Math.atan2(EYE - 0.55, d)));
         }
         if (pts.length) {
