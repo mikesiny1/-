@@ -61,7 +61,15 @@ export default function PhotoPlayer({ p }: { p: Project }) {
         st.current.room = r.room;
         st.current.changed = st.current.t;
       }
-      drawOverlays(g, W, H, p, brand, { t: st.current.t, duration: tour.duration, room: r.room, area: 0, fade: 0, roomChangedAt: st.current.changed }, logo);
+      drawOverlays(
+        g,
+        W,
+        H,
+        p,
+        brand,
+        { t: st.current.t, duration: tour.duration, room: r.room, area: 0, fade: 0, roomChangedAt: st.current.changed },
+        logo,
+      );
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
@@ -72,31 +80,36 @@ export default function PhotoPlayer({ p }: { p: Project }) {
       <canvas ref={canvas} width={1280} height={720} style={{ width: '100%', height: '100%', display: 'block' }} />
       {!tour && <div className="hint">טוען תמונות…</div>}
       <div className="vbar">
-        <button
-          className="pp"
-          onClick={() => {
-            if (tour && st.current.t >= tour.duration - 0.05) st.current.t = 0;
-            setPlaying(!playing);
-          }}
-          aria-label={playing ? 'השהיה' : 'ניגון'}
-        >
-          <Icon name={playing ? 'pause' : 'play'} />
-        </button>
-        <input
-          type="range"
-          min={0}
-          max={tour?.duration || 1}
-          step={0.01}
-          value={t}
-          onChange={(e) => {
-            st.current.t = Number(e.target.value);
-            setT(st.current.t);
-          }}
-          style={{ direction: 'ltr' }}
-        />
-        <span className="time">
-          {fmtTime(t)} / {fmtTime(tour?.duration || 0)}
-        </span>
+        <div className="vrow">
+          <button
+            className="pp"
+            onClick={() => {
+              if (tour && st.current.t >= tour.duration - 0.05) st.current.t = 0;
+              setPlaying(!playing);
+            }}
+            aria-label={playing ? 'השהיה' : 'ניגון'}
+          >
+            <Icon name={playing ? 'pause' : 'play'} />
+          </button>
+          <div className="track">
+            <input
+              type="range"
+              min={0}
+              max={tour?.duration || 1}
+              step={0.01}
+              value={t}
+              onChange={(e) => {
+                st.current.t = Number(e.target.value);
+                setT(st.current.t);
+              }}
+              aria-label="מיקום בסיור"
+              style={{ direction: 'ltr', ['--p' as string]: `${(t / (tour?.duration || 1)) * 100}%` }}
+            />
+          </div>
+          <span className="time">
+            {fmtTime(t)} / {fmtTime(tour?.duration || 0)}
+          </span>
+        </div>
       </div>
     </div>
   );

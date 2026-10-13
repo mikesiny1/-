@@ -57,9 +57,9 @@ export default function Dashboard() {
     <main className="page">
       <div className="dash-head">
         <div>
-          <div className="eyebrow">ניהול נכסים</div>
-          <h1>הנכסים שלך</h1>
-          <p>כל נכס הוא פרויקט: מעלים תוכנית או תמונות, בוחרים סגנון הלבשה, ומקבלים סיור מוכן לרשתות וללקוחות.</p>
+          <div className="eyebrow">הנכסים שלך</div>
+          <h1>כל דירה, מתוכנית לסיור</h1>
+          <p>מעלים תוכנית או תמונות, בוחרים סגנון ריהוט, ומקבלים סיור מצולם מוכן לשליחה ללקוח ולרשתות.</p>
         </div>
         <span className="spacer" />
         <button className="btn ghost" onClick={demo} disabled={busy}>

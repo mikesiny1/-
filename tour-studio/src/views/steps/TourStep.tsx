@@ -8,6 +8,8 @@ import type { DesignBrief, RoomType } from '../../lib/types';
 import type { FrameInfo, Mode } from '../../three/engine';
 import type { StepProps } from '../ProjectView';
 
+type Chapter = { name: string; area: number; t0: number; t1: number };
+
 export function Viewer3D({ p, initialMode = 'tour' }: { p: StepProps['p']; initialMode?: Mode }) {
   const box = useRef<HTMLDivElement>(null);
   const { engine, ready, error } = useEngine(box, p);
@@ -15,6 +17,7 @@ export function Viewer3D({ p, initialMode = 'tour' }: { p: StepProps['p']; initi
   const [mode, setMode] = useState<Mode>(initialMode);
   const [playing, setPlaying] = useState(false);
   const [hq, setHq] = useState(true);
+  const [chapters, setChapters] = useState<Chapter[]>([]);
   useEffect(() => {
     if (engine) setHq(engine.hq);
   }, [engine]);
@@ -22,10 +25,15 @@ export function Viewer3D({ p, initialMode = 'tour' }: { p: StepProps['p']; initi
   useEffect(() => {
     if (!engine) return;
     let last = 0;
+    let dur = -1;
     engine.onFrame = (info) => {
       const now = performance.now();
       if (now - last < 60 && info.labels === undefined) return;
       last = now;
+      if (info.duration !== dur) {
+        dur = info.duration;
+        setChapters(engine.chapters());
+      }
       setF(info);
       setPlaying(engine.playing);
     };
@@ -39,6 +47,7 @@ export function Viewer3D({ p, initialMode = 'tour' }: { p: StepProps['p']; initi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, ready]);
 
+  const t = f?.t || 0;
   const switchMode = (m: Mode) => {
     setMode(m);
     engine?.setMode(m);
@@ -96,7 +105,13 @@ export function Viewer3D({ p, initialMode = 'tour' }: { p: StepProps['p']; initi
         {!ready && !error && <div className="hint">בונה את הדירה…</div>}
         {mode === 'tour' && f && <div className="fade" style={{ opacity: f.fade }} />}
         {mode !== 'doll' && f?.room && (
-          <div className="roomtag">
+          <div className="roomtag" key={f.room}>
+            {mode === 'tour' && chapters.length > 0 && (
+              <span className="num">
+                {String(Math.max(1, chapters.findIndex((c) => t >= c.t0 && t < c.t1) + 1)).padStart(2, '0')} /{' '}
+                {String(chapters.length).padStart(2, '0')}
+              </span>
+            )}
             <b>{f.room}</b>
             {f.area > 1 && <span>כ-{Math.round(f.area)} מ״ר</span>}
           </div>
@@ -131,30 +146,51 @@ export function Viewer3D({ p, initialMode = 'tour' }: { p: StepProps['p']; initi
         )}
         {mode === 'tour' && (
           <div className="vbar">
-            <button
-              className="pp"
-              onClick={() => {
-                if (!engine) return;
-                if (engine.playing) engine.pause();
-                else engine.play();
-                setPlaying(engine.playing);
-              }}
-              aria-label={playing ? 'השהיה' : 'ניגון'}
-            >
-              <Icon name={playing ? 'pause' : 'play'} />
-            </button>
-            <input
-              type="range"
-              min={0}
-              max={f?.duration || 1}
-              step={0.01}
-              value={f?.t || 0}
-              onChange={(e) => engine?.seek(Number(e.target.value))}
-              style={{ direction: 'ltr' }}
-            />
-            <span className="time">
-              {fmtTime(f?.t || 0)} / {fmtTime(f?.duration || 0)}
-            </span>
+            <div className="vrow">
+              <button
+                className="pp"
+                onClick={() => {
+                  if (!engine) return;
+                  if (engine.playing) engine.pause();
+                  else engine.play();
+                  setPlaying(engine.playing);
+                }}
+                aria-label={playing ? 'השהיה' : 'ניגון'}
+              >
+                <Icon name={playing ? 'pause' : 'play'} />
+              </button>
+              <div className="track">
+                <input
+                  type="range"
+                  min={0}
+                  max={f?.duration || 1}
+                  step={0.01}
+                  value={t}
+                  onChange={(e) => engine?.seek(Number(e.target.value))}
+                  aria-label="מיקום בסיור"
+                  style={{ direction: 'ltr', ['--p' as string]: `${(t / (f?.duration || 1)) * 100}%` }}
+                />
+              </div>
+              <span className="time">
+                {fmtTime(t)} / {fmtTime(f?.duration || 0)}
+              </span>
+            </div>
+            {chapters.length > 1 && (
+              <nav className="chapters" aria-label="חדרים בסיור">
+                {chapters.map((c, i) => {
+                  const on = t >= c.t0 && t < c.t1;
+                  return (
+                    <button key={i} className={on ? 'on' : ''} aria-current={on ? 'true' : undefined} onClick={() => engine?.seek(c.t0 + 0.05)}>
+                      <b>{c.name}</b>
+                      <span>
+                        {fmtTime(c.t0)}
+                        {c.area > 1 ? ` · ${Math.round(c.area)} מ״ר` : ''}
+                      </span>
+                    </button>
+                  );
+                })}
+              </nav>
+            )}
           </div>
         )}
       </div>

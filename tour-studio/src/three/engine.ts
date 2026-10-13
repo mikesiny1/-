@@ -7,6 +7,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { astar, classifyOpening, dilate, downsample, mergeRects, regionAt, type PlanModel } from '../lib/plan';
 import { buildOpening, glazing, openingMats, type OpeningSpec } from './openings';
 import { loadInteriorEnv, loadView, realFit, type WindowView } from './real';
@@ -61,6 +63,25 @@ interface Sample {
 
 const OVERVIEW = 4.5;
 
+/** Photographic finish: lens vignette, a whisper of edge fringing and fine sensor grain. */
+const LENS = {
+  uniforms: { tDiffuse: { value: null }, seed: { value: 0 } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float seed; varying vec2 vUv;
+    float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233)) + seed * 43.7) * 43758.5453); }
+    void main(){
+      vec2 d = vUv - 0.5;
+      float r2 = dot(d, d);
+      vec2 off = d * r2 * 0.006;
+      vec3 c = vec3(texture2D(tDiffuse, vUv + off).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv - off).b);
+      c *= mix(1.0, 0.78, smoothstep(0.08, 0.55, r2 * 1.6));
+      float g = hash(vUv * 1024.0) - 0.5;
+      c += g * 0.022 * (1.0 - dot(c, vec3(0.3333)) * 0.6);
+      gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    }`,
+};
+
 function lerpAngle(a: number, b: number, t: number) {
   let d = b - a;
   while (d > Math.PI) d -= Math.PI * 2;
@@ -114,6 +135,7 @@ export class TourEngine {
   private openingSpecs: OpeningSpec[] = [];
   private downlightMat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#fff1dc', emissiveIntensity: 0.6 });
   private composer: EffectComposer | null = null;
+  private lens: ShaderPass | null = null;
   private gtao: GTAOPass | null = null;
   /** ambient occlusion and multisampled post-processing; off for slow devices */
   hq = true;
@@ -171,7 +193,11 @@ export class TourEngine {
       this.gtao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.6, thickness: 1.2, scale: 1.25, samples: 12 });
       this.gtao.blendIntensity = 0.9;
       this.composer.addPass(this.gtao);
+      // daylight blooming softly around windows, as a camera sensor sees it
+      this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.07, 0.4, 1.6));
       this.composer.addPass(new OutputPass());
+      this.lens = new ShaderPass(LENS);
+      this.composer.addPass(this.lens);
     } catch {
       this.composer = null;
     }
@@ -1150,6 +1176,7 @@ export class TourEngine {
   }
 
   private draw() {
+    if (this.lens) this.lens.uniforms.seed.value = (this.lens.uniforms.seed.value + 0.6180339) % 1;
     if (this.hq && this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
   }
@@ -1235,6 +1262,22 @@ export class TourEngine {
 
   roomsInTour() {
     return this.tourRooms.map((r) => ({ name: r.name, area: r.areaM2, type: r.type }));
+  }
+
+  /** The walkthrough as chapters: one per visit to a room, with its start and end time. */
+  chapters() {
+    const out: { name: string; area: number; t0: number; t1: number }[] = [];
+    let prev = -1;
+    this.samples.forEach((s, i) => {
+      if (s.room === prev) return;
+      prev = s.room;
+      const r = this.tourRooms[s.room];
+      const t = OVERVIEW + i / this.fps;
+      if (out.length) out[out.length - 1].t1 = t;
+      out.push({ name: r?.name || '', area: r?.areaM2 || 0, t0: t, t1: this.duration });
+    });
+    // brief pass-throughs are not chapters of their own
+    return out.filter((c) => c.t1 - c.t0 >= 2.5);
   }
 
   dispose() {
