@@ -17,7 +17,7 @@ export function useEngine(ref: RefObject<HTMLDivElement>, p: Project, enabled = 
     try {
       e = new TourEngine(ref.current);
     } catch {
-      setError('הדפדפן לא תומך בתלת-ממד (WebGL). נסו Chrome, Edge או Safari עדכניים.');
+      setError('הדפדפן חסם את התלת-ממד (WebGL). סגרו את כל חלונות הדפדפן ופתחו מחדש. אם זה חוזר: בהגדרות Chrome ← מערכת, הפעילו "השתמש בהאצת חומרה".');
       return;
     }
     setEngine(e);

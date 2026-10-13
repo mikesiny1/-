@@ -8,6 +8,7 @@ import { blobUrl, loadImage, putBlob } from '../../lib/db';
 import { download, FORMATS, record, slug, type Format } from '../../lib/exporter';
 import { drawCover, drawOverlays } from '../../lib/overlay';
 import { PhotoTour } from '../../lib/photoTour';
+import { renderReel } from '../../lib/reel';
 import { styleById } from '../../lib/styles';
 import type { ShareLog } from '../../lib/types';
 import type { StepProps } from '../ProjectView';
@@ -40,6 +41,11 @@ export default function PublishStep({ p, update }: StepProps) {
   const has3d = !!(p.planBlobId && p.plan?.rooms.length);
   const [source, setSource] = useState<'3d' | 'photos'>(has3d ? '3d' : 'photos');
   const [fmt, setFmt] = useState<Format>(FORMATS[0]);
+  const [kind, setKind] = useState<'tour' | 'ramp'>('tour');
+  const [extUrl, setExtUrl] = useState<string | null>(null);
+  useEffect(() => {
+    blobUrl(p.exterior?.blobId).then(setExtUrl);
+  }, [p.exterior?.blobId]);
   const [quality, setQuality] = useState<'hd' | 'fast'>('hd');
   const [music, setMusic] = useState(true);
   const [progress, setProgress] = useState<number | null>(null);
@@ -67,9 +73,72 @@ export default function PublishStep({ p, update }: StepProps) {
   const log = (channel: ShareLog['channel'], note: string, sent = false) =>
     update((x) => ({ ...x, shares: [...x.shares, { at: Date.now(), channel, note }], status: sent ? 'sent' : x.status }));
 
+  const produceRamp = async () => {
+    if (!engine || !ready) return setErr('המודל עדיין נבנה, נסו שוב בעוד רגע.');
+    const path = engine.buildReel();
+    if (!path) return setErr('לא נמצאו חדרים לסרטון. בדקו את שלב קריאת התוכנית.');
+    const img = p.exterior ? await loadImage(p.exterior.blobId) : null;
+    const k = quality === 'hd' ? 1 : 2 / 3;
+    const W = Math.round((1080 * k) / 2) * 2,
+      H = Math.round((1920 * k) / 2) * 2;
+    cancel.current = { cancelled: false };
+    setProgress(0);
+    try {
+      const res = await renderReel({
+        engine,
+        path,
+        exterior: img && p.exterior ? { img, x: p.exterior.x, y: p.exterior.y } : null,
+        W,
+        H,
+        out: out.current!,
+        onProgress: setProgress,
+        signal: cancel.current,
+        overlay: (g, t, dur) => {
+          // the property and the agent, quietly, on the closing frame
+          const a = Math.max(0, Math.min(1, (t - (dur - 0.45)) / 0.3));
+          if (a <= 0) return;
+          const s = W / 1080;
+          g.save();
+          g.globalAlpha = a;
+          const grad = g.createLinearGradient(0, H * 0.72, 0, H);
+          grad.addColorStop(0, 'rgba(10,11,12,0)');
+          grad.addColorStop(1, 'rgba(10,11,12,0.78)');
+          g.fillStyle = grad;
+          g.fillRect(0, H * 0.72, W, H * 0.28);
+          g.fillStyle = '#f4f2ee';
+          g.textAlign = 'right';
+          g.direction = 'rtl';
+          g.font = `300 ${Math.round(58 * s)}px 'IBM Plex Sans Hebrew', sans-serif`;
+          g.fillText(p.details.title || 'הדירה', W - 64 * s, H - 190 * s);
+          g.font = `400 ${Math.round(32 * s)}px 'IBM Plex Sans Hebrew', sans-serif`;
+          const line = [[p.details.address, p.details.city].filter(Boolean).join(', '), p.details.price ? `${p.details.price} ₪` : '']
+            .filter(Boolean)
+            .join(' · ');
+          g.fillText(line, W - 64 * s, H - 136 * s);
+          const agent = [brand.agencyName, brand.agentName, brand.agentPhone].filter(Boolean).join(' · ');
+          if (agent) {
+            g.fillStyle = '#d9c9a3';
+            g.font = `500 ${Math.round(28 * s)}px 'IBM Plex Sans Hebrew', sans-serif`;
+            g.fillText(agent, W - 64 * s, H - 84 * s);
+          }
+          g.restore();
+        },
+      });
+      if (res) {
+        setVideo({ url: URL.createObjectURL(res.blob), blob: res.blob, mime: res.mime });
+        update((x) => ({ ...x, status: x.status === 'sent' ? 'sent' : 'ready' }));
+      }
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setProgress(null);
+    }
+  };
+
   const produce = async () => {
     setErr('');
     setVideo(null);
+    if (kind === 'ramp') return produceRamp();
     const c = out.current!;
     const { W, H } = dims();
     c.width = W;
@@ -158,8 +227,12 @@ export default function PublishStep({ p, update }: StepProps) {
   };
 
   const ext = video?.mime.includes('mp4') ? 'mp4' : 'webm';
-  const fileName = `${slug(p.details.title || p.details.address)}-${fmt.id}.${ext}`;
-  const canShareFile = typeof navigator !== 'undefined' && !!navigator.canShare && !!video && navigator.canShare({ files: [new File([video.blob], fileName, { type: video.blob.type })] });
+  const fileName = `${slug(p.details.title || p.details.address)}-${kind === 'ramp' ? 'speed-ramp' : fmt.id}.${ext}`;
+  const canShareFile =
+    typeof navigator !== 'undefined' &&
+    !!navigator.canShare &&
+    !!video &&
+    navigator.canShare({ files: [new File([video.blob], fileName, { type: video.blob.type })] });
 
   return (
     <>
@@ -188,17 +261,91 @@ export default function PublishStep({ p, update }: StepProps) {
               />
             </div>
           )}
-          <div className="fmt">
-            {FORMATS.map((f) => (
-              <button key={f.id} className={f.id === fmt.id ? 'on' : ''} onClick={() => setFmt(f)}>
-                <span className="shape" style={{ width: (f.w / f.h) * 34 > 40 ? 40 : (f.w / f.h) * 34, height: f.w > f.h ? 40 * (f.h / f.w) : 34 }} />
-                <div>
-                  <b>{f.name}</b>
-                  <span>{f.hint}</span>
-                </div>
-              </button>
-            ))}
-          </div>
+          {has3d && (
+            <div>
+              <div className="small muted" style={{ marginBottom: 6 }}>
+                סוג הסרטון
+              </div>
+              <Seg
+                value={kind}
+                onChange={(v) => {
+                  setKind(v);
+                  setVideo(null);
+                  if (v === 'ramp') {
+                    setSource('3d');
+                    setFmt(FORMATS[0]);
+                  }
+                }}
+                options={[
+                  { id: 'tour', label: 'סיור מלא' },
+                  { id: 'ramp', label: 'ספיד-ראמפ מהבניין · 10 שנ׳' },
+                ]}
+              />
+            </div>
+          )}
+          {kind === 'ramp' && (
+            <section className="panel">
+              <header>
+                <h3>צילום הבניין</h3>
+                <span className="spacer" />
+                <label className="btn ghost sm" style={{ cursor: 'pointer' }}>
+                  <Icon name="image" /> {p.exterior ? 'החלפת תמונה' : 'העלאת תמונה'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      const id = await putBlob(f);
+                      update((x) => ({ ...x, exterior: { blobId: id, x: 0.5, y: 0.45 } }));
+                      toast('עכשיו לחצו על החלון של הדירה בתמונה');
+                    }}
+                  />
+                </label>
+              </header>
+              <div className="in stack">
+                {extUrl && p.exterior ? (
+                  <>
+                    <div className="small muted">לחצו על החלון של הדירה. משם המצלמה נכנסת פנימה, ושם היד מצביעה.</div>
+                    <div
+                      className="extpick"
+                      onClick={(e) => {
+                        const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                        const x = (e.clientX - r.left) / r.width,
+                          y = (e.clientY - r.top) / r.height;
+                        update((q) => ({ ...q, exterior: { ...q.exterior!, x, y } }));
+                      }}
+                    >
+                      <img src={extUrl} alt="צילום הבניין" />
+                      <i style={{ left: `${p.exterior.x * 100}%`, top: `${p.exterior.y * 100}%` }} />
+                    </div>
+                  </>
+                ) : (
+                  <div className="small muted">
+                    מעלים צילום של הבניין מבחוץ ומסמנים את החלון של הדירה. הסרטון מתחיל ביד שמצביעה על החלון, טס פנימה דרכו, עובר בסלון, בחדר השינה
+                    ובמטבח — וחוזר לאחור עד הבניין. בלי צילום, הסרטון מתחיל ונגמר מול חלון הסלון מבחוץ.
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+          {kind === 'tour' && (
+            <div className="fmt">
+              {FORMATS.map((f) => (
+                <button key={f.id} className={f.id === fmt.id ? 'on' : ''} onClick={() => setFmt(f)}>
+                  <span
+                    className="shape"
+                    style={{ width: (f.w / f.h) * 34 > 40 ? 40 : (f.w / f.h) * 34, height: f.w > f.h ? 40 * (f.h / f.w) : 34 }}
+                  />
+                  <div>
+                    <b>{f.name}</b>
+                    <span>{f.hint}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
           <div className="row wrap" style={{ gap: 22 }}>
             <Switch on={p.design.furnish} onChange={(v) => update((x) => ({ ...x, design: { ...x.design, furnish: v } }))}>
               ריהוט {p.design.furnish ? `(${styleById(p.design.style).name})` : 'כבוי'}
@@ -216,13 +363,17 @@ export default function PublishStep({ p, update }: StepProps) {
             />
           </div>
 
-          <div className="render" style={{ aspectRatio: `${fmt.w} / ${fmt.h}`, maxHeight: 560 }}>
+          <div className="render" style={{ aspectRatio: kind === 'ramp' ? '9 / 16' : `${fmt.w} / ${fmt.h}`, maxHeight: 560 }}>
             <canvas ref={out} style={{ display: progress !== null ? 'block' : 'none', width: '100%', height: '100%' }} />
             {progress === null && video && <video src={video.url} controls playsInline style={{ width: '100%', height: '100%' }} />}
             {progress === null && !video && <div className="ph">הסרטון יופיע כאן. ההפקה רצה בזמן אמת — כדאי להשאיר את הלשונית פתוחה.</div>}
             {progress !== null && <div className="prog" style={{ width: `${progress * 100}%` }} />}
           </div>
-          {err && <div className="notice" style={{ color: 'var(--danger)' }}>{err}</div>}
+          {err && (
+            <div className="notice" style={{ color: 'var(--danger)' }}>
+              {err}
+            </div>
+          )}
 
           <div className="row wrap">
             {progress === null ? (

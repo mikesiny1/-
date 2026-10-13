@@ -2062,3 +2062,27 @@ button {
   font-family: var(--mono);
   font-size: 13px;
 }
+
+/* speed-ramp: mark the flat's window on the building photo */
+.extpick {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: crosshair;
+  background: var(--paper-2);
+}
+.extpick img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.extpick i {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px rgba(20, 21, 22, 0.6), 0 2px 10px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}

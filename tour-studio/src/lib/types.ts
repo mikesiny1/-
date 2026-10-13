@@ -138,6 +138,8 @@ export interface Project {
   design: DesignBrief;
   coverBlobId: string | null;
   shares: ShareLog[];
+  /** photo of the building with the flat's window marked (0..1), for the speed-ramp reel */
+  exterior?: { blobId: string; x: number; y: number } | null;
 }
 
 export interface Brand {

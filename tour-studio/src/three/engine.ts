@@ -46,6 +46,15 @@ export interface EngineRoom {
 
 export type Mode = 'tour' | 'walk' | 'doll';
 
+/** One continuous speed-ramp path: outside a living-room window → living → bedroom → kitchen. */
+export interface ReelPath {
+  pts: { x: number; z: number; yaw: number; pitch: number }[];
+  /** arc-length (in points, 5 cm apart) at: outside, inside the window, end of living glide,
+   *  bedroom start, bedroom end, kitchen start, kitchen end */
+  keys: number[];
+  rooms: string[];
+}
+
 export interface FrameInfo {
   t: number;
   duration: number;
@@ -143,6 +152,7 @@ export class TourEngine {
   private composer: EffectComposer | null = null;
   private lens: ShaderPass | null = null;
   private dof: BokehPass | null = null;
+  private bloom: UnrealBloomPass | null = null;
   private focusDist = 4;
   private focusRay = new THREE.Raycaster();
   private gtao: GTAOPass | null = null;
@@ -150,10 +160,23 @@ export class TourEngine {
   hq = true;
   /** an engine kept only for video export renders nothing until it is used */
   idle = false;
+  private contextLost = false;
+  /** frame-time watchdog: heavy effects step down on slow GPUs */
+  private slowFrames = 0;
+  private lightFx = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    this.renderer = createRenderer();
+    // if the GPU resets (driver hiccup, too much load) drop to the light pipeline instead of going black
+    this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.hq = false;
+      this.contextLost = true;
+    });
+    this.renderer.domElement.addEventListener('webglcontextrestored', () => {
+      this.contextLost = false;
+    });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -206,7 +229,8 @@ export class TourEngine {
       this.dof = new BokehPass(this.scene, this.camera, { focus: 4, aperture: 0.0011, maxblur: 0.0032 });
       this.composer.addPass(this.dof);
       // daylight blooming softly around windows, as a camera sensor sees it
-      this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.07, 0.4, 1.6));
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.07, 0.4, 1.6);
+      this.composer.addPass(this.bloom);
       this.composer.addPass(new OutputPass());
       this.lens = new ShaderPass(LENS);
       this.composer.addPass(this.lens);
@@ -1235,8 +1259,9 @@ export class TourEngine {
 
   /** Pull focus to what the centre of the frame sees, smoothly, like a focus puller. */
   private updateFocus() {
+    if (this.bloom) this.bloom.enabled = !this.lightFx;
     if (!this.dof) return;
-    const on = this.hq && this.mode !== 'doll' && this.ceiling.visible;
+    const on = this.hq && !this.lightFx && this.mode !== 'doll' && this.ceiling.visible;
     this.dof.enabled = on;
     if (!on) return;
     this.focusRay.setFromCamera(new THREE.Vector2(0, -0.1), this.camera);
@@ -1249,7 +1274,16 @@ export class TourEngine {
 
   private loop(now: number) {
     this.raf = requestAnimationFrame(this.loop);
-    if (this.exporting || this.idle) return;
+    if (this.exporting || this.idle || this.contextLost) return;
+    const frameMs = now - this.last;
+    // a GPU that can't keep up first loses depth of field and glow, then the full pipeline
+    if (this.hq && frameMs > 55 && frameMs < 1000) {
+      if (++this.slowFrames > 45) {
+        this.slowFrames = 0;
+        if (!this.lightFx) this.lightFx = true;
+        else this.hq = false;
+      }
+    } else if (this.slowFrames > 0) this.slowFrames--;
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
     this.tick(now / 1000);
@@ -1326,6 +1360,171 @@ export class TourEngine {
     return this.renderer.domElement.toDataURL(type, 0.92);
   }
 
+  // ------------------------------------------------------------ speed-ramp reel
+
+  private roomAtExact(x: number, z: number) {
+    const m = this.model;
+    if (!m) return null;
+    const px = Math.round(x * m.pxPerM + (m.hull.x0 + m.hull.x1) / 2),
+      py = Math.round(z * m.pxPerM + (m.hull.y0 + m.hull.y1) / 2);
+    if (px < 0 || py < 0 || px >= m.w || py >= m.h) return null;
+    const l = m.labels[py * m.w + px];
+    return this.rooms.find((r) => r.label === l) || null;
+  }
+
+  /** Walk from a to b over the floor grid (A*, Chaikin-smoothed), as points. */
+  private walkPath(a: THREE.Vector2, b: THREE.Vector2) {
+    const g = this.grid!;
+    const s = this.cellOf(a.x, a.y),
+      t = this.cellOf(b.x, b.y);
+    const cells = (this.nav && astar(this.nav, g.gw, g.gh, s[0], s[1], t[0], t[1])) || astar(g.block, g.gw, g.gh, s[0], s[1], t[0], t[1]);
+    let pts = cells && cells.length > 1 ? cells.map(([cx, cy]) => this.cellCenter(cx, cy)) : [a.clone(), b.clone()];
+    pts[0] = a.clone();
+    pts[pts.length - 1] = b.clone();
+    for (let it = 0; it < 3 && pts.length > 2; it++) {
+      const out = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) out.push(pts[i].clone().lerp(pts[i + 1], 0.25), pts[i].clone().lerp(pts[i + 1], 0.75));
+      out.push(pts[pts.length - 1]);
+      pts = out;
+    }
+    return pts;
+  }
+
+  /** Step from p toward q while the floor stays free; returns the last free point. */
+  private reach(p: THREE.Vector2, q: THREE.Vector2, keep = 0.35) {
+    const d = q.clone().sub(p);
+    const len = d.length();
+    d.normalize();
+    let last = p.clone();
+    for (let k = 0.1; k <= len; k += 0.1) {
+      const c = p.clone().addScaledVector(d, k);
+      // stay clear of walls by `keep` metres to either side
+      if (this.blockedAt(c.x, c.y) || this.blockedAt(c.x + d.y * keep, c.y - d.x * keep) || this.blockedAt(c.x - d.y * keep, c.y + d.x * keep)) break;
+      last = c;
+    }
+    return last;
+  }
+
+  buildReel(): ReelPath | null {
+    if (!this.grid || !this.rooms.length) return null;
+    const byType = (...ts: RoomType[]) => {
+      for (const t of ts) {
+        const r = this.rooms.filter((x) => x.type === t).sort((a, b) => b.areaM2 - a.areaM2)[0];
+        if (r) return r;
+      }
+      return null;
+    };
+    const living = byType('living', 'dining') || [...this.rooms].sort((a, b) => b.areaM2 - a.areaM2)[0];
+    const bed = byType('master', 'bedroom', 'kids', 'office');
+    const kitchen = byType('kitchen', 'dining');
+    // the widest glazed opening of the living room is where we fly in
+    let best: { c: THREE.Vector2; n: THREE.Vector2; w: number } | null = null;
+    for (const o of this.openingSpecs) {
+      if (o.kind !== 'window' && o.kind !== 'slider' && o.kind !== 'facade') continue;
+      const n = o.along === 'x' ? new THREE.Vector2(0, o.inward) : new THREE.Vector2(o.inward, 0);
+      const c = new THREE.Vector2(o.cx, o.cz);
+      const inside = c.clone().addScaledVector(n, 0.6);
+      if (this.roomAtExact(inside.x, inside.y) !== living) continue;
+      if (!best || o.width > best.w) best = { c, n, w: o.width };
+    }
+    const lv = new THREE.Vector2(living.view.x, living.view.z);
+    if (!best) {
+      // no window found: start from the living room's viewpoint, backing in from its far side
+      const f = new THREE.Vector2(living.focus.x, living.focus.z);
+      const n = f.clone().sub(lv).normalize();
+      best = { c: lv.clone().addScaledVector(n, -0.5), n, w: 1 };
+    }
+    const out = best.c.clone().addScaledVector(best.n, -1.8);
+    const inn = this.reach(best.c.clone().addScaledVector(best.n, 0.3), best.c.clone().addScaledVector(best.n, 1.3));
+    const lf = new THREE.Vector2(living.focus.x, living.focus.z);
+    const lEnd = this.reach(inn, inn.clone().add(lf.clone().sub(inn).normalize().multiplyScalar(Math.min(2.6, Math.max(0.6, inn.distanceTo(lf) - 1.4)))));
+
+    type Seg = { pts: THREE.Vector2[]; look: 'ahead' | 'normal' | THREE.Vector3 };
+    const segs: Seg[] = [
+      { pts: [out, inn], look: 'normal' },
+      { pts: [inn, lEnd], look: living.focus },
+    ];
+    const names = [living.name];
+    let cur = lEnd;
+    const visit = (r: EngineRoom) => {
+      const v = new THREE.Vector2(r.view.x, r.view.z);
+      const f = new THREE.Vector2(r.focus.x, r.focus.z);
+      segs.push({ pts: this.walkPath(cur, v), look: 'ahead' });
+      // glide in close to the focus (bed, island), for material details
+      const close = this.reach(v, v.clone().add(f.clone().sub(v).normalize().multiplyScalar(Math.max(0.4, v.distanceTo(f) - 1.05))));
+      // and drift sideways around it
+      const side = close.clone().sub(f).rotateAround(new THREE.Vector2(), 0.45).add(f);
+      const end = this.reach(close, side, 0.3);
+      segs.push({ pts: [v, close, end], look: r.focus });
+      names.push(r.name);
+      cur = end;
+    };
+    if (bed) visit(bed);
+    if (kitchen && kitchen !== living) visit(kitchen);
+
+    // resample every segment at 5 cm, remembering where each starts
+    const pts: ReelPath['pts'] = [];
+    const keys: number[] = [0];
+    const step = 0.05;
+    for (const sg of segs) {
+      const curve = sg.pts.length > 2 ? new THREE.SplineCurve(sg.pts) : new THREE.LineCurve(sg.pts[0], sg.pts[1]);
+      const len = Math.max(step, curve.getLength());
+      const n = Math.max(2, Math.round(len / step));
+      for (let i = pts.length ? 1 : 0; i <= n; i++) {
+        const u = i / n;
+        const p = curve.getPointAt(u);
+        let yaw = 0,
+          pitch = -0.04;
+        if (sg.look === 'normal') yaw = Math.atan2(best.n.x, best.n.y);
+        else if (sg.look === 'ahead') {
+          const a = curve.getPointAt(Math.min(1, u + 1.2 / len));
+          yaw = a.distanceTo(p) > 0.05 ? Math.atan2(a.x - p.x, a.y - p.y) : pts.length ? pts[pts.length - 1].yaw : 0;
+        } else {
+          const f = sg.look;
+          const d = Math.hypot(f.x - p.x, f.z - p.y);
+          yaw = Math.atan2(f.x - p.x, f.z - p.y);
+          pitch = -Math.max(0.06, Math.min(0.42, Math.atan2(EYE - 0.55, d)));
+        }
+        if (pts.length) {
+          const prev = pts[pts.length - 1].yaw;
+          while (yaw - prev > Math.PI) yaw -= Math.PI * 2;
+          while (yaw - prev < -Math.PI) yaw += Math.PI * 2;
+        }
+        pts.push({ x: p.x, z: p.y, yaw, pitch });
+      }
+      keys.push(pts.length - 1);
+    }
+    // steady the view: the operator anticipates turns over about a metre
+    const W = 14;
+    const yaws = pts.map((p) => p.yaw),
+      pitches = pts.map((p) => p.pitch);
+    pts.forEach((p, i) => {
+      let a = 0,
+        b = 0,
+        n = 0;
+      for (let k = Math.max(0, i - W); k <= Math.min(pts.length - 1, i + W); k++, n++) {
+        a += yaws[k];
+        b += pitches[k];
+      }
+      p.yaw = a / n;
+      p.pitch = b / n;
+    });
+    // key list: outside, in, living end, then per visited room: [start, end]
+    const k = [keys[0], keys[1], keys[2]];
+    for (let i = 3; i + 1 < keys.length; i += 2) k.push(keys[i], keys[i + 1]);
+    return { pts, keys: k, rooms: names };
+  }
+
+  /** Render one frame from an arbitrary eye pose (for the reel). */
+  renderPose(x: number, z: number, yaw: number, pitch: number, time: number) {
+    this.camera.position.set(x, EYE, z);
+    this.camera.lookAt(x + Math.sin(yaw) * Math.cos(pitch), EYE + Math.sin(pitch), z + Math.cos(yaw) * Math.cos(pitch));
+    this.ceiling.visible = true;
+    this.city.visible = !this.photoSky;
+    this.tick(time);
+    this.draw();
+  }
+
   roomsInTour() {
     return this.tourRooms.map((r) => ({ name: r.name, area: r.areaM2, type: r.type }));
   }
@@ -1359,8 +1558,28 @@ export class TourEngine {
     this.clear(this.openingsGroup);
     this.composer?.dispose();
     this.renderer.dispose();
+    // hand the WebGL context back now: browsers allow only a handful at a time
+    this.renderer.forceContextLoss();
     this.renderer.domElement.remove();
   }
+}
+
+/** A renderer, retrying with lighter settings when the first request for a GPU context fails. */
+function createRenderer() {
+  const tries: THREE.WebGLRendererParameters[] = [
+    { antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' },
+    { antialias: false, preserveDrawingBuffer: true },
+    { antialias: false, preserveDrawingBuffer: true, failIfMajorPerformanceCaveat: false, powerPreference: 'low-power' },
+  ];
+  let last: unknown;
+  for (const p of tries) {
+    try {
+      return new THREE.WebGLRenderer(p);
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last;
 }
 
 /** Neighbouring buildings and trees seen through the windows, as if the flat were a few floors up. */
