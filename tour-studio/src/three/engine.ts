@@ -9,6 +9,7 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
 import { astar, classifyOpening, dilate, downsample, mergeRects, regionAt, type PlanModel } from '../lib/plan';
 import { buildOpening, glazing, openingMats, type OpeningSpec } from './openings';
 import { loadInteriorEnv, loadView, realFit, type WindowView } from './real';
@@ -76,6 +77,10 @@ const LENS = {
       vec2 off = d * r2 * 0.006;
       vec3 c = vec3(texture2D(tDiffuse, vUv + off).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv - off).b);
       c *= mix(1.0, 0.78, smoothstep(0.08, 0.55, r2 * 1.6));
+      // print-like grade: a gentle S-curve, cool shadows, warm highlights
+      c = mix(c, c * c * (3.0 - 2.0 * c), 0.22);
+      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c += vec3(-0.010, -0.002, 0.012) * (1.0 - l) + vec3(0.014, 0.005, -0.012) * l;
       float g = hash(vUv * 1024.0) - 0.5;
       c += g * 0.022 * (1.0 - dot(c, vec3(0.3333)) * 0.6);
       gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
@@ -136,6 +141,9 @@ export class TourEngine {
   private downlightMat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#fff1dc', emissiveIntensity: 0.6 });
   private composer: EffectComposer | null = null;
   private lens: ShaderPass | null = null;
+  private dof: BokehPass | null = null;
+  private focusDist = 4;
+  private focusRay = new THREE.Raycaster();
   private gtao: GTAOPass | null = null;
   /** ambient occlusion and multisampled post-processing; off for slow devices */
   hq = true;
@@ -193,6 +201,9 @@ export class TourEngine {
       this.gtao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.6, thickness: 1.2, scale: 1.25, samples: 12 });
       this.gtao.blendIntensity = 0.9;
       this.composer.addPass(this.gtao);
+      // a real lens focuses on what it looks at: the far wall or the sofa stays crisp, the chair in front softens
+      this.dof = new BokehPass(this.scene, this.camera, { focus: 4, aperture: 0.0011, maxblur: 0.0032 });
+      this.composer.addPass(this.dof);
       // daylight blooming softly around windows, as a camera sensor sees it
       this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.07, 0.4, 1.6));
       this.composer.addPass(new OutputPass());
@@ -804,6 +815,8 @@ export class TourEngine {
     this.hemi.intensity = evening ? 0.15 : 0.75;
     this.sun.intensity = evening ? 0 : 2.6;
     this.scene.environmentIntensity = evening ? 0.1 : 0.5;
+    // windows read bright by day, like an interior photograph exposed for the room
+    this.scene.backgroundIntensity = evening ? 0.22 : 1.3;
     this.renderer.toneMappingExposure = evening ? 1.3 : 1.15;
     this.mats.lampShade.emissiveIntensity = evening ? 2.2 : 0;
     this.windowLights.visible = !evening;
@@ -1158,7 +1171,7 @@ export class TourEngine {
         if (this.disposed || this.view !== view) return;
         this.viewTex = t;
         this.scene.background = t;
-        this.scene.backgroundIntensity = 0.6;
+        this.scene.backgroundIntensity = this.brief?.light === 'evening' ? 0.22 : 1.3;
         this.viewRotation = view === 'sea' ? 2.2 : view === 'city' ? 0.6 : 1.2;
         this.photoSky = true;
         this.sky.visible = false;
@@ -1176,9 +1189,24 @@ export class TourEngine {
   }
 
   private draw() {
+    this.updateFocus();
     if (this.lens) this.lens.uniforms.seed.value = (this.lens.uniforms.seed.value + 0.6180339) % 1;
     if (this.hq && this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Pull focus to what the centre of the frame sees, smoothly, like a focus puller. */
+  private updateFocus() {
+    if (!this.dof) return;
+    const on = this.hq && this.mode !== 'doll' && this.ceiling.visible;
+    this.dof.enabled = on;
+    if (!on) return;
+    this.focusRay.setFromCamera(new THREE.Vector2(0, -0.1), this.camera);
+    this.focusRay.far = 30;
+    const hit = this.focusRay.intersectObjects([this.structure, this.furniture, this.fixtures], true)[0];
+    const target = Math.max(1.2, Math.min(12, hit ? hit.distance : 8));
+    this.focusDist += (target - this.focusDist) * 0.08;
+    (this.dof.uniforms as Record<string, THREE.IUniform>).focus.value = this.focusDist;
   }
 
   private loop(now: number) {
