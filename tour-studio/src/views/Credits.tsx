@@ -8,6 +8,8 @@ const ROWS: [string, string, string][] = [
   ['צמח בעציץ (Diffuse Transmission Plant)', 'Rico Cilliers; חומרים: Eric Chadwick, © 2024 Darmstadt Graphics Group GmbH', 'CC BY 4.0'],
   ['צלחת זיתים (Iridescent Dish With Olives)', 'Eric Chadwick, © 2020 Wayfair, LLC', 'CC BY 4.0'],
   ['מנורת קיר (Anisotropy Barn Lamp)', 'Eric Chadwick, © 2023 Wayfair, LLC', 'CC BY 4.0'],
+  ['ספל תה (Diffuse Transmission Teacup)', 'Polyhaven.com, Eric Chadwick', 'CC0'],
+  ['אבוקדו (Avocado)', 'Microsoft', 'CC0'],
   ['רצפת עץ סרוקה', 'three.js examples', 'MIT'],
   ['נופים מהחלון וסביבת תאורה', 'Poly Haven', 'CC0'],
 ];

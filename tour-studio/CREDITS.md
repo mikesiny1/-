@@ -16,6 +16,8 @@ to 1024px WebP, meshes welded/simplified/quantized); no other changes.
 | DiffuseTransmissionPlant.glb | Rico Cilliers (original, CC0); materials Eric Chadwick, © 2024 Darmstadt Graphics Group GmbH | CC BY 4.0 |
 | IridescentDishWithOlives.glb | Eric Chadwick, © 2020 Wayfair, LLC | CC BY 4.0 |
 | AnisotropyBarnLamp.glb | Eric Chadwick, © 2023 Wayfair, LLC | CC BY 4.0 |
+| DiffuseTransmissionTeacup.glb | Polyhaven.com and Eric Chadwick | CC0 |
+| Avocado.glb | Microsoft | CC0 |
 
 Material maps in `public/media/tex` (wood, leather, velvet, damask, paisley, stripe) were extracted
 from the models above and carry the same credits.

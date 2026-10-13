@@ -9,6 +9,7 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { plasterMaps, worldUVs } from './plaster';
 import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
 import { astar, classifyOpening, dilate, downsample, mergeRects, regionAt, type PlanModel } from '../lib/plan';
 import { buildOpening, glazing, openingMats, type OpeningSpec } from './openings';
@@ -283,10 +284,17 @@ export class TourEngine {
       g.translate(p.x, WALL_H / 2, p.y);
       wallGeos.push(g);
     }
-    const wallMat = new THREE.MeshStandardMaterial({ color: this.style.wall, roughness: 0.92 });
+    const plaster = plasterMaps();
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: this.style.wall,
+      roughness: 1,
+      roughnessMap: plaster.rough,
+      bumpMap: plaster.bump,
+      bumpScale: 0.35,
+    });
     wallMat.name = 'wall';
     if (wallGeos.length) {
-      const walls = new THREE.Mesh(mergeGeometries(wallGeos), wallMat);
+      const walls = new THREE.Mesh(worldUVs(mergeGeometries(wallGeos), 1.6), wallMat);
       walls.castShadow = walls.receiveShadow = true;
       walls.name = 'walls';
       this.structure.add(walls);
@@ -383,7 +391,11 @@ export class TourEngine {
     }
     const cg = rectsGeo(ceil, WALL_H, 1, true);
     if (cg) {
-      const cm = new THREE.Mesh(cg, new THREE.MeshStandardMaterial({ color: this.style.ceiling, roughness: 1 }));
+      const pm = plasterMaps();
+      const cm = new THREE.Mesh(
+        worldUVs(cg, 2.2),
+        new THREE.MeshStandardMaterial({ color: this.style.ceiling, roughness: 1, roughnessMap: pm.rough, bumpMap: pm.bump, bumpScale: 0.25 }),
+      );
       cm.name = 'ceiling';
       this.ceiling.add(cm);
     }
@@ -908,16 +920,35 @@ export class TourEngine {
       const n = Math.round(dur / dt);
       const startYaw = S.length ? S[S.length - 1].yaw : 0;
       const endYaw = yawTo(b.view, b.focus);
+      const headingAt = (u: number) => {
+        const p = curve.getPointAt(u);
+        const ahead = curve.getPointAt(Math.min(1, u + 1.1 / Math.max(len, 0.5)));
+        return p.distanceTo(ahead) > 0.05 ? Math.atan2(ahead.x - p.x, ahead.y - p.y) : endYaw;
+      };
+      // a person turns to face the way out before walking, and turns to the room on arrival:
+      // never walk backwards, never whip round mid-stride
+      const turn = (x: number, z: number, from: number, to: number) => {
+        let d = to - from;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        if (Math.abs(d) < 0.35) return;
+        const m = Math.round((0.6 + Math.abs(d) * 0.8) / dt);
+        for (let i = 1; i <= m; i++) pushSample(x, z, from + d * ease(i / m), -0.06, idx);
+      };
+      const first = curve.getPointAt(0);
+      const h0 = headingAt(0);
+      turn(first.x, first.y, startYaw, h0);
       for (let i = 1; i <= n; i++) {
         const u = ease(i / n);
         const p = curve.getPointAt(u);
-        const ahead = curve.getPointAt(Math.min(1, u + 0.9 / Math.max(len, 0.5)));
-        let yaw = p.distanceTo(ahead) > 0.05 ? Math.atan2(ahead.x - p.x, ahead.y - p.y) : endYaw;
+        let yaw = headingAt(u);
         const k = i / n;
-        if (k < 0.2) yaw = lerpAngle(startYaw, yaw, k / 0.2);
-        if (k > 0.7) yaw = lerpAngle(yaw, endYaw, (k - 0.7) / 0.3);
+        if (k < 0.15) yaw = lerpAngle(h0, yaw, k / 0.15);
         pushSample(p.x, p.y, yaw, -0.05, idx);
       }
+      // arrive facing where the room's slow pan begins, so the pan follows without a jolt
+      const last = S[S.length - 1];
+      turn(last.x, last.z, last.yaw, endYaw - (b.areaM2 > 14 ? 1.1 : 0.8) / 2);
     };
 
     order.forEach((r, i) => {
@@ -934,6 +965,13 @@ export class TourEngine {
     smooth('yaw', 0.12);
     smooth('x', 0.35);
     smooth('z', 0.35);
+    // a steady operator never pans faster than ~75°/s: rate-limit both ways and meet in the middle
+    const maxStep = 1.3 * dt;
+    const fwd = S.map((x) => x.yaw),
+      bwd = fwd.slice();
+    for (let i = 1; i < fwd.length; i++) fwd[i] = fwd[i - 1] + Math.max(-maxStep, Math.min(maxStep, fwd[i] - fwd[i - 1]));
+    for (let i = bwd.length - 2; i >= 0; i--) bwd[i] = bwd[i + 1] + Math.max(-maxStep, Math.min(maxStep, bwd[i] - bwd[i + 1]));
+    S.forEach((x, i) => (x.yaw = (fwd[i] + bwd[i]) / 2));
     this.tourRooms = order;
     this.duration = OVERVIEW + S.length / this.fps;
   }

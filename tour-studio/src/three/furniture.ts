@@ -428,8 +428,17 @@ function coffeeTable(s: StyleDef, m: Mats) {
   }
   const top = s.id === 'japandi' || s.id === 'scandi' || s.id === 'boho' || s.id === 'mediterranean' ? 0.37 : 0.385;
   g.add(bookStack(m, 0.12, top, 0.05, 3, 0.3));
-  g.add(bowl(m, -0.2, top, -0.05));
-  g.add(vase(m, -0.05, top, 0.15, 0.6, true));
+  // a cup of tea set down a moment ago
+  const cup = hasReal('teacup') ? realFit('teacup', { width: 0.15 }) : null;
+  if (cup) {
+    cup.position.set(0.14, top, 0.02);
+    cup.rotation.y = 0.6;
+    g.add(cup);
+    g.add(vase(m, -0.12, top, 0.12, 0.6, true));
+  } else {
+    g.add(bowl(m, -0.2, top, -0.05));
+    g.add(vase(m, -0.05, top, 0.15, 0.6, true));
+  }
   return g;
 }
 
@@ -943,6 +952,14 @@ export function kitchenRun(s: StyleDef, m: Mats, len: number, withUppers = true)
     // a little open-shelf styling under the cabinets
     g.add(vase(m, x0 + runLen * 0.12, 0.895, -0.12, 0.7, true));
     g.add(bowl(m, x0 + runLen * 0.55, 0.895, -0.1));
+    // two avocado halves on the board, the kitchen is lived in
+    for (const [dx, ry] of [[0, 0.4], [0.07, 2.6]] as const) {
+      const a = hasReal('avocado') ? realFit('avocado', { height: 0.11 }) : null;
+      if (!a) break;
+      a.rotation.set(-Math.PI / 2, 0, ry);
+      a.position.set(x0 + runLen * 0.47 + dx, 0.895 + 0.028, 0.08 + dx * 0.4);
+      g.add(a);
+    }
   }
   if (fridgeW) {
     g.add(block(fridgeW - 0.02, 2.2, 0.66, cab, -len / 2 + fridgeW / 2, 0, 0.02, 0.004));

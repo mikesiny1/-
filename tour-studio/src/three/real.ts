@@ -16,7 +16,18 @@ export const mediaUrl = (path: string) => new URL('media/' + path, document.base
  */
 export const mediaCompat = () => !!(window as unknown as { __MEDIA_COMPAT?: boolean }).__MEDIA_COMPAT;
 
-export type RealId = 'glamSofa' | 'carvedSofa' | 'damaskChair' | 'velvetChair' | 'pouf' | 'flowers' | 'plant' | 'olives' | 'sconce';
+export type RealId =
+  | 'glamSofa'
+  | 'carvedSofa'
+  | 'damaskChair'
+  | 'velvetChair'
+  | 'pouf'
+  | 'flowers'
+  | 'plant'
+  | 'olives'
+  | 'sconce'
+  | 'teacup'
+  | 'avocado';
 
 const FILES: Record<RealId, string> = {
   glamSofa: 'GlamVelvetSofa.glb',
@@ -28,6 +39,8 @@ const FILES: Record<RealId, string> = {
   plant: 'DiffuseTransmissionPlant.glb',
   olives: 'IridescentDishWithOlives.glb',
   sconce: 'AnisotropyBarnLamp.glb',
+  teacup: 'DiffuseTransmissionTeacup.glb',
+  avocado: 'Avocado.glb',
 };
 
 const models = new Map<RealId, THREE.Object3D>();
