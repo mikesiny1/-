@@ -1,14 +1,23 @@
 /** Draws an architect-style sample plan (5 rooms, ~105 m²) so the studio can be tried without files. */
-export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' | 'glass' | 'thin' = 'solid'): HTMLCanvasElement {
+export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' | 'glass' | 'thin' | 'sheet' = 'solid'): HTMLCanvasElement {
   const S = 60; // px per metre
   const M = 1.4; // margin in metres
+  // 'sheet': a sales sheet with a black title block beside the plan
+  const extra = variant === 'sheet' ? 4.5 : 0;
+  const thinStyle = variant === 'thin' || variant === 'sheet';
   const c = document.createElement('canvas');
-  c.width = Math.round((13 + 2 * M) * S);
+  c.width = Math.round((13 + 2 * M + extra) * S);
   c.height = Math.round((11 + 2 * M) * S);
   const g = c.getContext('2d')!;
   g.fillStyle = '#fbfbf8';
   g.fillRect(0, 0, c.width, c.height);
-  const X = (m: number) => (m + M) * S;
+  const X = (m: number) => (m + M + extra) * S;
+  if (extra) {
+    g.fillStyle = '#1b1b1b';
+    g.fillRect(0.2 * S, 0.4 * S, (extra - 0.4) * S, c.height - 0.8 * S);
+    g.fillStyle = '#ffffff';
+    for (let k = 0; k < 14; k++) g.fillRect(0.5 * S, (0.9 + k * 0.75) * S, (1.2 + ((k * 7) % 5) * 0.5) * S, 0.35 * S);
+  }
   const Y = (m: number) => (m + M) * S;
 
   const ink = variant === 'gray' ? '#8f8f8f' : '#1b1b1b';
@@ -19,7 +28,7 @@ export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' | 'glass' | '
       y0 === y1
         ? [X(Math.min(x0, x1) - h), Y(y0 - h), (Math.abs(x1 - x0) + t) * S, t * S]
         : [X(x0 - h), Y(Math.min(y0, y1) - h), t * S, (Math.abs(y1 - y0) + t) * S];
-    if (variant === 'thin' && t < 0.2) {
+    if (thinStyle && t < 0.2) {
       // sales-plan style: interior partitions as a single thin line
       g.fillStyle = '#3a3a3a';
       if (y0 === y1) g.fillRect(r[0], Y(y0) - 1.5, r[2], 3);
@@ -120,7 +129,7 @@ export function drawDemoPlan(variant: 'solid' | 'gray' | 'outline' | 'glass' | '
   glazeH(9, 0.6, 5.4);
   glazeH(9, 9.6, 11.2);
 
-  if (variant === 'glass' || variant === 'thin') {
+  if (variant === 'glass' || thinStyle) {
     // developer-plan look: the living room facades are full-height glazing drawn in thin grey
     g.fillStyle = '#fbfbf8';
     g.fillRect(X(-0.2), Y(4.2), 0.4 * S, 4.9 * S); // left facade of the living room

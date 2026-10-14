@@ -242,6 +242,36 @@ export function extractWalls(r: Raster, threshold: number, minWall: number, fill
     return 1;
   });
   for (let i = 0; i < opened.length; i++) opened[i] = labels[i] ? keep[labels[i]] : 0;
+  // big solid blocks (a title block, a legend panel, a filled neighbour) are not walls: a wall is
+  // never thicker than a few percent of the plan, so whatever survives a deep erosion is dropped
+  const deep = Math.max(4, Math.round(Math.max(w, h) * 0.02));
+  // white lettering inside a black panel is bridged first, so the panel reads as one mass
+  const bridge = Math.max(2, Math.round(Math.max(w, h) * 0.013));
+  // (double-line walls are skipped: their fill already merges close lines into solid areas)
+  const core = fillOutline > 0 ? new Uint8Array(w * h) : erode(close(opened, w, h, bridge), w, h, deep);
+  const big = new Map<number, { n: number; x0: number; y0: number; x1: number; y1: number }>();
+  for (let i = 0; i < core.length; i++) {
+    if (!core[i]) continue;
+    const l = labels[i];
+    const x = i % w,
+      y = (i - x) / w;
+    const b = big.get(l) || { n: 0, x0: x, y0: y, x1: x, y1: y };
+    b.n++;
+    b.x0 = Math.min(b.x0, x);
+    b.y0 = Math.min(b.y0, y);
+    b.x1 = Math.max(b.x1, x);
+    b.y1 = Math.max(b.y1, y);
+    big.set(l, b);
+  }
+  const drop = new Set<number>();
+  for (const [l, b] of big) if (b.n > w * h * 0.003 && Math.max(b.x1 - b.x0, b.y1 - b.y0) > Math.max(w, h) * 0.06) drop.add(l);
+  if (drop.size) {
+    // remove only the thick mass itself, so walls that happen to touch it survive
+    const mass = new Uint8Array(w * h);
+    for (let i = 0; i < core.length; i++) if (core[i] && drop.has(labels[i])) mass[i] = 1;
+    const thick = dilate(mass, w, h, deep + bridge + 2);
+    for (let i = 0; i < opened.length; i++) if (thick[i]) opened[i] = 0;
+  }
   return opened;
 }
 
@@ -615,12 +645,27 @@ function detectOpenings(wall: Uint8Array, interior: Uint8Array, labels: Int32Arr
           inkPx += ink[y * w + x];
         }
       if (!n || wallPx / n > 0.12) continue;
+      // a wall running across the band means these are two separate walls, not a gap in one
+      let crossed = false;
+      for (let a = Math.ceil(g0) + 2; a < g1 - 2 && !crossed; a++) {
+        let k = 0,
+          m = 0;
+        for (let c = Math.ceil(c0); c < c1; c++, m++) {
+          const x = axis === 'x' ? a : c,
+            y = axis === 'x' ? c : a;
+          if (x >= 0 && y >= 0 && x < w && y < h && wall[y * w + x]) k++;
+        }
+        if (m && k / m > 0.8) crossed = true;
+      }
+      if (crossed) continue;
       const mid = (g0 + g1) / 2;
       const reach = (c1 - c0) / 2 + ppm * 0.35;
       const cm = (c0 + c1) / 2;
       const pa = axis === 'x' ? at(mid, cm - reach) : at(cm - reach, mid);
       const pb = axis === 'x' ? at(mid, cm + reach) : at(cm + reach, mid);
       if (!pa.inside && !pb.inside) continue;
+      // the same room on both sides: the 'gap' is just open floor inside one room
+      if (g1 - g0 > ppm * 1.5 && pa.inside && pb.inside && pa.l && pa.l === pb.l) continue;
       // don't pair walls across an open room: both sides must be close to the band
       out.push({
         x0: axis === 'x' ? g0 : c0,
