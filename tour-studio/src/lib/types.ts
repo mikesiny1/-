@@ -69,6 +69,8 @@ export interface PlanSettings {
   fillOutline?: number;
   /** where the scale came from */
   scaleSource?: 'doors' | 'area' | 'guess' | 'manual';
+  /** room names read off the plan (OCR), in working-image pixels */
+  labels?: { type: RoomType; text: string; x: number; y: number }[];
 }
 
 export type FurnitureKind =

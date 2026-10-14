@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, Range, useToast } from '../../components/ui';
 import { loadImage, uid } from '../../lib/db';
 import { autoRooms, classifyOpening, regionAt, roomRectAt, type OpeningKind, type PlanModel, type Raster } from '../../lib/plan';
-import { autoTunePlan, getRaster, modelFor } from '../../lib/project';
+import { autoTunePlan, getRaster, modelFor, readPlanLabels } from '../../lib/project';
 import { ROOM_TYPES, roomName } from '../../lib/styles';
 import type { PlanRoom, PlanSettings, RoomType } from '../../lib/types';
 import type { StepProps } from '../ProjectView';
@@ -77,7 +77,9 @@ export default function PlanStep({ p, update, next }: StepProps) {
   const retune = async () => {
     if (!raster) return;
     setTuning(0);
-    const next = await autoTunePlan(raster, p.details.sqm, p.details.rooms, setTuning);
+    // room names printed on the plan: read once, then kept with the plan
+    const labels = p.plan?.labels?.length ? p.plan.labels : p.planBlobId ? await readPlanLabels(p.planBlobId, raster) : [];
+    const next = await autoTunePlan(raster, p.details.sqm, p.details.rooms, setTuning, labels);
     setTuning(null);
     setPlan(() => next);
     toast(`הקריאה עודכנה · ${next.rooms.length} חללים`);
@@ -365,7 +367,7 @@ export default function PlanStep({ p, update, next }: StepProps) {
                 className="btn quiet sm"
                 onClick={() => {
                   if (!model) return;
-                  setPlan((pl) => ({ ...pl, rooms: autoRooms(model, p.details.rooms) }));
+                  setPlan((pl) => ({ ...pl, rooms: autoRooms(model, p.details.rooms, pl.labels) }));
                   toast('החדרים זוהו מחדש');
                 }}
               >

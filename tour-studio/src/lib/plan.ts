@@ -1316,7 +1316,7 @@ export function regionAt(m: PlanModel, x: number, y: number): RoomRegion | null 
 }
 
 /** Guess room types the way an Israeli agent would read the plan. */
-export function autoRooms(m: PlanModel, declaredRooms: number): PlanRoom[] {
+export function autoRooms(m: PlanModel, declaredRooms: number, hints: PlanSettings['labels'] = []): PlanRoom[] {
   const regs = [...m.regions.values()].filter((r) => r.areaM2 >= 1.6).sort((a, b) => b.areaM2 - a.areaM2);
   const out: PlanRoom[] = [];
   const used = new Set<number>();
@@ -1331,7 +1331,52 @@ export function autoRooms(m: PlanModel, declaredRooms: number): PlanRoom[] {
     });
   };
   if (!regs.length) return out;
-  push(regs[0], 'living', 'סלון');
+
+  // 1. what the architect wrote wins: each printed room name types the room it sits in
+  const labelAt = (x: number, y: number) => {
+    for (let rad = 0; rad <= 12; rad += 3)
+      for (let dy = -rad; dy <= rad; dy += 3)
+        for (let dx = -rad; dx <= rad; dx += 3) {
+          const px = Math.round(x + dx),
+            py = Math.round(y + dy);
+          if (px < 0 || py < 0 || px >= m.w || py >= m.h) continue;
+          const l = m.labels[py * m.w + px];
+          if (l && m.regions.has(l)) return l;
+        }
+    return 0;
+  };
+  const written = new Map<number, RoomType[]>();
+  for (const hnt of hints || []) {
+    const l = labelAt(hnt.x, hnt.y);
+    if (!l) continue;
+    if (!written.has(l)) written.set(l, []);
+    written.get(l)!.push(hnt.type);
+  }
+  let openKitchen = false;
+  const textTypes = new Set<RoomType>();
+  for (const r of regs) {
+    const ts = written.get(r.label);
+    if (!ts || !ts.length) continue;
+    let type: RoomType;
+    if (ts.includes('living')) {
+      type = 'living';
+      // a kitchen written inside the living space is an open kitchen, not a room of its own
+      if (ts.includes('kitchen')) openKitchen = true;
+    } else {
+      const count = new Map<RoomType, number>();
+      for (const t of ts) count.set(t, (count.get(t) || 0) + 1);
+      type = [...count.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    }
+    textTypes.add(type);
+    push(r, type, type === 'living' ? (openKitchen ? 'סלון ומטבח' : 'סלון') : type === 'mamad' ? 'ממ״ד' : '');
+  }
+
+  // 2. the rest by shape, size and walls
+  if (!textTypes.has('living')) {
+    const big = regs.find((r) => !used.has(r.label));
+    if (big) push(big, 'living', 'סלון');
+  }
+  if (openKitchen) textTypes.add('kitchen');
 
   const pxm = m.pxPerM;
   const narrow = (r: RoomRegion) => {
@@ -1356,15 +1401,18 @@ export function autoRooms(m: PlanModel, declaredRooms: number): PlanRoom[] {
   const mamad = mid
     .filter((r) => m.medianWall > 0 && r.wallThickness >= m.medianWall * 1.5 && r.areaM2 > 6 && r.areaM2 < 16)
     .sort((a, b) => b.wallThickness - a.wallThickness)[0];
-  if (mamad) push(mamad, 'mamad', 'ממ״ד');
+  if (mamad && !textTypes.has('mamad')) push(mamad, 'mamad', 'ממ״ד');
   const rest = mid.filter((r) => !used.has(r.label));
-  const bedroomsWanted = Math.max(1, Math.round(declaredRooms || 4) - 1 - (mamad ? 1 : 0));
+  const hasMamad = textTypes.has('mamad') || out.some((o) => o.type === 'mamad');
+  const textBeds = out.filter((o) => o.type === 'master' || o.type === 'bedroom' || o.type === 'kids').length;
+  const bedroomsWanted = Math.max(0, Math.round(declaredRooms || 4) - 1 - (hasMamad ? 1 : 0) - textBeds);
   let bedrooms = 0;
+  const hasMaster = out.some((o) => o.type === 'master');
   for (const r of rest) {
     if (bedrooms < bedroomsWanted) {
-      push(r, bedrooms === 0 ? 'master' : 'bedroom', '');
+      push(r, bedrooms === 0 && !hasMaster ? 'master' : 'bedroom', '');
       bedrooms++;
-    } else if (!out.some((o) => o.type === 'kitchen')) push(r, 'kitchen', '');
+    } else if (!out.some((o) => o.type === 'kitchen') && !textTypes.has('kitchen')) push(r, 'kitchen', '');
     else push(r, r.touchesOutside ? 'balcony' : 'office', '');
   }
   return out;

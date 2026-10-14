@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Drop, Icon, useToast } from '../../components/ui';
 import { blobUrl, deleteBlob, putBlob, uid } from '../../lib/db';
-import { autoTunePlan, getRaster } from '../../lib/project';
+import { autoTunePlan, getRaster, readPlanLabels } from '../../lib/project';
 import { pdfToImage } from '../../lib/pdf';
 import type { PhotoEntry, RoomType } from '../../lib/types';
 import type { StepProps } from '../ProjectView';
@@ -45,8 +45,9 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
       }
       const id = await putBlob(src instanceof File ? await shrink(src, 2000) : src);
       const r = await getRaster(id);
+      const labels = r ? await readPlanLabels(id, r, (k) => setProgress(`קורא את שמות החדרים בתוכנית ${Math.round(k * 100)}%`)) : [];
       const plan = r
-        ? await autoTunePlan(r, p.details.sqm, p.details.rooms, (k) => setProgress(`קורא את התוכנית · בודק הגדרות קריאה ${Math.round(k * 100)}%`))
+        ? await autoTunePlan(r, p.details.sqm, p.details.rooms, (k) => setProgress(`קורא את התוכנית · בודק הגדרות קריאה ${Math.round(k * 100)}%`), labels)
         : null;
       setProgress('');
       if (p.planBlobId) deleteBlob(p.planBlobId);

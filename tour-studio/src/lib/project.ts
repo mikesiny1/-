@@ -92,7 +92,25 @@ export function scorePlan(m: PlanModel, sqm: number, declaredRooms: number) {
  * thresholds, with and without filling double-line walls, and keeps the reading that
  * gives the most plausible apartment (room count, total area, wall density, openings).
  */
-export async function autoTunePlan(r: Raster, sqm: number, declaredRooms: number, onProgress?: (k: number) => void): Promise<PlanSettings> {
+/** Room names printed on the plan, read by OCR on this device; empty when OCR is unavailable. */
+export async function readPlanLabels(blobId: string, r: Raster, onProgress?: (k: number) => void): Promise<NonNullable<PlanSettings['labels']>> {
+  try {
+    const img = await loadImage(blobId);
+    if (!img) return [];
+    const { readRoomLabels } = await import('./ocr');
+    return await readRoomLabels(img, r.scale, onProgress);
+  } catch {
+    return [];
+  }
+}
+
+export async function autoTunePlan(
+  r: Raster,
+  sqm: number,
+  declaredRooms: number,
+  onProgress?: (k: number) => void,
+  labels: PlanSettings['labels'] = [],
+): Promise<PlanSettings> {
   const base = autoThreshold(r);
   const thresholds = [...new Set([base, 95, 125, 155, 185].map((t) => Math.round(t / 5) * 5))];
   const fillPx = Math.max(2, Math.round(Math.max(r.w, r.h) * 0.006));
@@ -124,7 +142,8 @@ export async function autoTunePlan(r: Raster, sqm: number, declaredRooms: number
   }
   onProgress?.(1);
   const s = best!.s;
-  s.rooms = autoRooms(best!.model, declaredRooms);
+  s.labels = labels;
+  s.rooms = autoRooms(best!.model, declaredRooms, labels);
   return s;
 }
 
