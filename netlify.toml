@@ -1,0 +1,13 @@
+# Netlify: build the studio from tour-studio/ on every push
+[build]
+  base = "tour-studio"
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[headers]]
+  for = "/media/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"
