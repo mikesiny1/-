@@ -38,6 +38,28 @@ export function typeOfWord(raw: string): RoomType | null {
   return null;
 }
 
+let primed: Promise<void> | null = null;
+function primeModelCache() {
+  primed ??= (async () => {
+    const model = new Uint8Array(await (await fetch(media('heb-traineddata.wasm'))).arrayBuffer());
+    // tesseract.js keeps models in idb-keyval's default store under "<cachePath>/<lang>.traineddata"
+    const db: IDBDatabase = await new Promise((res, rej) => {
+      const rq = indexedDB.open('keyval-store');
+      rq.onupgradeneeded = () => rq.result.createObjectStore('keyval');
+      rq.onsuccess = () => res(rq.result);
+      rq.onerror = () => rej(rq.error);
+    });
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction('keyval', 'readwrite');
+      tx.objectStore('keyval').put(model, './heb.traineddata');
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error);
+    });
+    db.close();
+  })();
+  return primed;
+}
+
 /** Image → canvas rotated by k quarter turns clockwise. */
 function rotated(src: HTMLCanvasElement, k: 0 | 1 | 3) {
   if (k === 0) return src;
@@ -68,11 +90,14 @@ export async function readRoomLabels(img: HTMLImageElement | HTMLCanvasElement, 
   g.fillRect(0, 0, base.width, base.height);
   g.drawImage(img, 0, 0, base.width, base.height);
 
+  // the model ships with the site (named .wasm so any static host serves it). It is placed in the
+  // OCR worker's own cache, where the worker looks first, so nothing is fetched from a third-party CDN.
+  await primeModelCache();
   const worker = await createWorker('heb', 1, {
     workerPath: media('worker.min.js'),
     corePath: media(''),
     langPath: media(''),
-    gzip: true,
+    gzip: false,
     workerBlobURL: false,
   });
   const hints: TextHint[] = [];
