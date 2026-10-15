@@ -10,6 +10,192 @@ export interface PdfPlan {
   labels: { type: RoomType; text: string; x: number; y: number }[];
   /** the PDF has a real text layer (not a scan) */
   hasText: boolean;
+  /** the analysed copy keeps only the heaviest pen (the cut walls of a working drawing) */
+  cutPen: boolean;
+}
+
+const lum = (style: unknown) => {
+  if (typeof style !== 'string') return 255;
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(style);
+  if (m) return 0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16);
+  const r = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/.exec(style);
+  return r ? 0.299 * +r[1] + 0.587 * +r[2] + 0.114 * +r[3] : 255;
+};
+
+/**
+ * Watches the pens pdf.js draws with. pdf.js sets the line width (in user units) just before each
+ * stroke, then may scale the context up for hairlines: so the true width is the one set, times the
+ * transform at the moment it was set.
+ * 'measure' tallies dark strokes by true width; 'filter' only lets through strokes of the cut pen.
+ */
+function watchPens(g: CanvasRenderingContext2D, mode: 'measure' | 'filter', cut = 0) {
+  const proto = CanvasRenderingContext2D.prototype;
+  const desc = Object.getOwnPropertyDescriptor(proto, 'lineWidth')!;
+  let trueWidth = 1;
+  Object.defineProperty(g, 'lineWidth', {
+    configurable: true,
+    get() {
+      return desc.get!.call(g);
+    },
+    set(v: number) {
+      const m = g.getTransform();
+      trueWidth = v * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+      desc.set!.call(g, v);
+    },
+  });
+  const tally = new Map<number, number>();
+  const nativeStroke = proto.stroke;
+  (g as unknown as { stroke: (...a: unknown[]) => void }).stroke = function (...a: unknown[]) {
+    const dark = lum(g.strokeStyle) < 90;
+    if (mode === 'measure') {
+      if (dark) {
+        const k = Math.round(trueWidth * 20) / 20;
+        tally.set(k, (tally.get(k) || 0) + 1);
+      }
+      return (nativeStroke as (...x: unknown[]) => void).apply(g, a);
+    }
+    if (!dark || trueWidth < cut * 0.8) return;
+    // draw the cut pen solid, at least ~2 px, so it survives scaling down for analysis
+    const m = g.getTransform();
+    const sc = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
+    const prev = desc.get!.call(g);
+    desc.set!.call(g, Math.max(prev, 2 / sc));
+    g.strokeStyle = '#000';
+    (nativeStroke as (...x: unknown[]) => void).apply(g, a);
+    desc.set!.call(g, prev);
+  };
+  if (mode === 'filter') {
+    // dark solid fills (poché walls) stay; light fills (rooms, furniture, paper) go
+    const nativeFill = proto.fill;
+    (g as unknown as { fill: (...a: unknown[]) => void }).fill = function (...a: unknown[]) {
+      if (lum(g.fillStyle) < 90) (nativeFill as (...x: unknown[]) => void).apply(g, a);
+    };
+  }
+  return {
+    /** the heaviest dark pen that is used a fair amount, if lighter dark pens are common too */
+    cutWidth() {
+      const total = [...tally.values()].reduce((x, y) => x + y, 0);
+      if (total < 50) return 0;
+      const widths = [...tally.entries()].sort((x, y) => y[0] - x[0]);
+      let acc = 0;
+      for (const [wd, n] of widths) {
+        acc += n;
+        if (n >= Math.max(15, total * 0.04)) {
+          // only worth it when a good share of dark strokes are thinner than this pen
+          const thinner = total - acc;
+          return thinner > total * 0.25 && wd > 0 ? wd : 0;
+        }
+      }
+      return 0;
+    },
+  };
+}
+
+/**
+ * Where the drawing sits on a sheet, in canvas pixels: the biggest cluster of ink once nearby
+ * strokes are merged, leaving out the sheet frame (spans the page) and the title column (a tall,
+ * narrow strip at the side).
+ */
+function drawingBox(c: HTMLCanvasElement) {
+  const W = 400;
+  const k = W / Math.max(c.width, c.height);
+  const w = Math.max(1, Math.round(c.width * k)),
+    h = Math.max(1, Math.round(c.height * k));
+  const t = document.createElement('canvas');
+  t.width = w;
+  t.height = h;
+  const g = t.getContext('2d', { willReadFrequently: true })!;
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, w, h);
+  g.drawImage(c, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  const ink = new Uint8Array(w * h);
+  for (let i = 0; i < ink.length; i++) ink[i] = d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2] < 600 ? 1 : 0;
+  // sheet frames and the title column's rules are straight lines across most of the page: erase them
+  const long = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; ) {
+      if (!ink[y * w + x]) {
+        x++;
+        continue;
+      }
+      const a = x;
+      while (x < w && ink[y * w + x]) x++;
+      if (x - a > w * 0.6) for (let k = a; k < x; k++) long[y * w + k] = 1;
+    }
+  for (let x = 0; x < w; x++)
+    for (let y = 0; y < h; ) {
+      if (!ink[y * w + x]) {
+        y++;
+        continue;
+      }
+      const a = y;
+      while (y < h && ink[y * w + x]) y++;
+      if (y - a > h * 0.6) for (let k = a; k < y; k++) long[k * w + x] = 1;
+    }
+  for (let i = 0; i < ink.length; i++) if (long[i]) ink[i] = 0;
+  // merge strokes closer than ~1.5% of the sheet
+  const r = Math.max(2, Math.round(W * 0.015));
+  const grow = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      if (!ink[y * w + x]) continue;
+      for (let dy = -r; dy <= r; dy++)
+        for (let dx = -r; dx <= r; dx++) {
+          const xx = x + dx,
+            yy = y + dy;
+          if (xx >= 0 && yy >= 0 && xx < w && yy < h) grow[yy * w + xx] = 1;
+        }
+    }
+  const lab = new Int32Array(w * h);
+  let best = { score: 0, x0: 0, y0: 0, x1: c.width, y1: c.height };
+  for (let s = 0, n = 1; s < w * h; s++) {
+    if (!grow[s] || lab[s]) continue;
+    const st = [s];
+    lab[s] = n;
+    let x0 = w,
+      y0 = h,
+      x1 = 0,
+      y1 = 0,
+      mass = 0;
+    const inked: number[] = [];
+    while (st.length) {
+      const i = st.pop()!;
+      const x = i % w,
+        y = (i - x) / w;
+      mass += ink[i];
+      if (ink[i]) inked.push(i);
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+      for (const j of [i - 1, i + 1, i - w, i + w]) if (j >= 0 && j < w * h && grow[j] && !lab[j] && Math.abs((j % w) - x) <= 1) (lab[j] = n), st.push(j);
+    }
+    n++;
+    const bw = x1 - x0 + 1,
+      bh = y1 - y0 + 1;
+    if (bw > w * 0.9 && bh > h * 0.9) continue; // the sheet frame
+    // frames and panels: their ink runs along the edges of their own box
+    const e = Math.max(2, Math.round(Math.max(bw, bh) * 0.03));
+    let edge = 0;
+    for (const i of inked) {
+      const x = i % w,
+        y = (i - x) / w;
+      if (x - x0 < e || x1 - x < e || y - y0 < e || y1 - y < e) edge++;
+    }
+    if (inked.length && edge / inked.length > 0.55 && bw * bh > w * h * 0.05) continue;
+    const aspect = Math.max(bw / bh, bh / bw);
+    const score = mass / (1 + Math.max(0, aspect - 2.2) * 2);
+    if (score > best.score) best = { score, x0, y0, x1, y1 };
+  }
+  if (!best.score) return { x0: 0, y0: 0, x1: c.width, y1: c.height };
+  const m = Math.round(Math.max(best.x1 - best.x0, best.y1 - best.y0) * 0.05);
+  return {
+    x0: Math.max(0, (best.x0 - m) / k),
+    y0: Math.max(0, (best.y0 - m) / k),
+    x1: Math.min(c.width, (best.x1 + 1 + m) / k),
+    y1: Math.min(c.height, (best.y1 + 1 + m) / k),
+  };
 }
 
 const toBlob = (c: HTMLCanvasElement) => new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
@@ -27,8 +213,8 @@ export async function pdfToPlan(file: Blob, maxSide = 2400): Promise<PdfPlan> {
   try {
     const page = await doc.getPage(1);
     const base = page.getViewport({ scale: 1 });
-    const vp = page.getViewport({ scale: maxSide / Math.max(base.width, base.height) });
-    const canvas = () => {
+    type VP = ReturnType<typeof page.getViewport>;
+    const canvas = (vp: VP) => {
       const c = document.createElement('canvas');
       c.width = Math.round(vp.width);
       c.height = Math.round(vp.height);
@@ -37,16 +223,55 @@ export async function pdfToPlan(file: Blob, maxSide = 2400): Promise<PdfPlan> {
       g.fillRect(0, 0, c.width, c.height);
       return { c, g };
     };
+    const silence = (g: CanvasRenderingContext2D, images = false) => {
+      const x = g as CanvasRenderingContext2D & Record<string, unknown>;
+      x.fillText = () => {};
+      x.strokeText = () => {};
+      if (images) x.drawImage = () => {};
+    };
 
-    const full = canvas();
+    // 1. a quick look at the whole sheet: which pens are used, and where the drawing is
+    const s0 = 1600 / Math.max(base.width, base.height);
+    const vp0 = page.getViewport({ scale: s0 });
+    const look = canvas(vp0);
+    const pens = watchPens(look.g, 'measure');
+    await page.render({ canvasContext: look.g, viewport: vp0 }).promise;
+    // Working drawings draw what is cut (the walls) with the heaviest pen; dimensions, lettering,
+    // furniture, hatching and door swings use lighter ones.
+    const cutPdf = pens.cutWidth() / s0;
+    const struct0 = canvas(vp0);
+    silence(struct0.g, true);
+    if (cutPdf) watchPens(struct0.g, 'filter', cutPdf * s0);
+    await page.render({ canvasContext: struct0.g, viewport: vp0 }).promise;
+    // the drawing on the sheet: frame, title column and site map left out
+    const box = drawingBox(struct0.c);
+
+    // 2. that area, rendered at full resolution
+    const cw = (box.x1 - box.x0) / s0,
+      ch = (box.y1 - box.y0) / s0;
+    const s1 = Math.min(maxSide / Math.max(cw, ch), 8);
+    const vp = page.getViewport({ scale: s1, offsetX: (-box.x0 / s0) * s1, offsetY: (-box.y0 / s0) * s1 });
+    const sized = (vp_: VP) => {
+      const o = canvas(vp_);
+      o.c.width = Math.round(cw * s1);
+      o.c.height = Math.round(ch * s1);
+      o.g.fillStyle = '#fff';
+      o.g.fillRect(0, 0, o.c.width, o.c.height);
+      return o;
+    };
+    const full = sized(vp);
     await page.render({ canvasContext: full.g, viewport: vp }).promise;
-
-    // the same page with every text-drawing call silenced
-    const clean = canvas();
-    const g = clean.g as CanvasRenderingContext2D & Record<string, unknown>;
-    g.fillText = () => {};
-    g.strokeText = () => {};
+    const clean = sized(vp);
+    silence(clean.g);
     await page.render({ canvasContext: clean.g, viewport: vp }).promise;
+    let structure: HTMLCanvasElement | null = null;
+    if (cutPdf) {
+      const st = sized(vp);
+      silence(st.g, true);
+      watchPens(st.g, 'filter', cutPdf * s1);
+      await page.render({ canvasContext: st.g, viewport: vp }).promise;
+      structure = st.c;
+    }
 
     // the text layer: room names with their place on the page
     const tc = await page.getTextContent();
@@ -99,7 +324,13 @@ export async function pdfToPlan(file: Blob, maxSide = 2400): Promise<PdfPlan> {
       const type = typeOfWord(wd.text);
       if (type && !labels.some((l) => l.type === type && Math.hypot(l.x - wd.x, l.y - wd.y) < 20)) labels.push({ type, text: wd.text, x: wd.x, y: wd.y });
     }
-    return { clean: await toBlob(clean.c), full: await toBlob(full.c), labels, hasText: items.length > 3 };
+    return {
+      clean: await toBlob(structure || clean.c),
+      full: await toBlob(full.c),
+      labels,
+      hasText: items.length > 3,
+      cutPen: !!structure,
+    };
   } finally {
     doc.destroy();
   }

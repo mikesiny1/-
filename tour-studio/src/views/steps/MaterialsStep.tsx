@@ -45,10 +45,11 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
         setProgress('קורא את קובץ ה-PDF…');
         const pdf = await pdfToPlan(f);
         // an architect's PDF: read the drawing without its lettering, show it as printed
-        if (pdf.hasText) {
+        if (pdf.hasText || pdf.cutPen) {
           src = pdf.clean;
           viewId = await putBlob(pdf.full);
-          pdfLabels = pdf.labels;
+          // names drawn as outlines aren't in the text layer: those are read off the printed page
+          pdfLabels = pdf.labels.length ? pdf.labels : null;
         } else src = pdf.full;
       }
       const id = await putBlob(src instanceof File ? await shrink(src, 2000) : src);
@@ -58,7 +59,7 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
         ? []
         : pdfLabels
           ? pdfLabels.map((l) => ({ ...l, x: l.x * r.scale, y: l.y * r.scale }))
-          : await readPlanLabels(id, r, (k) => setProgress(`קורא את שמות החדרים בתוכנית ${Math.round(k * 100)}%`));
+          : await readPlanLabels(viewId || id, r, (k) => setProgress(`קורא את שמות החדרים בתוכנית ${Math.round(k * 100)}%`));
       const plan = r
         ? await autoTunePlan(r, p.details.sqm, p.details.rooms, (k) => setProgress(`קורא את התוכנית · בודק הגדרות קריאה ${Math.round(k * 100)}%`), labels)
         : null;

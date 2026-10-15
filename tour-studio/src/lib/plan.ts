@@ -1444,9 +1444,9 @@ export function autoRooms(m: PlanModel, declaredRooms: number, hints: PlanSettin
       // a kitchen written inside the living space is an open kitchen, not a room of its own
       if (ts.includes('kitchen')) openKitchen = true;
     } else {
-      const count = new Map<RoomType, number>();
-      for (const t of ts) count.set(t, (count.get(t) || 0) + 1);
-      type = [...count.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      // the specific word wins: "רחצה הורים" is a bathroom, "שינה הורים" a master, "שינה ממ״ד" a safe room
+      const rank: RoomType[] = ['bathroom', 'mamad', 'master', 'kids', 'office', 'bedroom', 'kitchen', 'balcony', 'storage', 'hall', 'dining'];
+      type = [...ts].sort((a, b) => rank.indexOf(a) - rank.indexOf(b))[0];
     }
     textTypes.add(type);
     push(r, type, type === 'living' ? (openKitchen ? 'סלון ומטבח' : 'סלון') : type === 'mamad' ? 'ממ״ד' : '');
@@ -1473,7 +1473,9 @@ export function autoRooms(m: PlanModel, declaredRooms: number, hints: PlanSettin
   const medianExt = exts.length ? exts[Math.floor(exts.length / 2)] : 0;
   for (const r of regs) {
     if (used.has(r.label)) continue;
-    if (r.touchesOutside && r.extWall > 0 && r.extWall < medianExt * 0.8) push(r, 'balcony', '');
+    // a very small closed room is a bathroom even on an outside wall; balconies are bigger
+    if (r.areaM2 < 4.6 && !narrow(r)) push(r, 'bathroom', '');
+    else if (r.touchesOutside && r.extWall > 0 && r.extWall < medianExt * 0.8) push(r, 'balcony', '');
     else if (narrow(r)) push(r, 'hall', '');
     else if (r.areaM2 < 5.2) push(r, 'bathroom', '');
   }
