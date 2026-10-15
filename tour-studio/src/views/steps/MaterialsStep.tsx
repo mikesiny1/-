@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Drop, Icon, useToast } from '../../components/ui';
 import { blobUrl, deleteBlob, putBlob, uid } from '../../lib/db';
-import { autoTunePlan, getRaster, readPlanLabels } from '../../lib/project';
+import { autoTunePlan, getRaster, readLabelsByRoom, readPlanLabels } from '../../lib/project';
+import { analyzePlan, autoRooms } from '../../lib/plan';
 import { pdfPages, pdfToPlan, type PdfPage } from '../../lib/pdf';
 import { wallColorCopy } from '../../lib/wallcolor';
 import type { PhotoEntry, RoomType } from '../../lib/types';
@@ -56,17 +57,6 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
     await readPlan(f, 1);
   };
 
-  // small names are read at two sizes (each catches words the other misses); a name found twice counts once
-  const readLabels = async (blobId: string, r: NonNullable<Awaited<ReturnType<typeof getRaster>>>, sharp?: { blob: Blob; scale: number }) => {
-    const parts = sharp ? 2 : 1;
-    const say = (i: number) => (k: number) => setProgress(`קורא את שמות החדרים בתוכנית ${Math.round(((i + k) / parts) * 100)}%`);
-    const a = await readPlanLabels(blobId, r, say(0));
-    if (!sharp) return a;
-    const b = await readPlanLabels(sharp.blob, r, say(1), sharp.scale);
-    const near = Math.max(r.w, r.h) * 0.02;
-    return [...a, ...b.filter((l) => !a.some((o) => o.type === l.type && Math.hypot(o.x - l.x, o.y - l.y) < near))];
-  };
-
   const readPlan = async (f: File, pageNo: number) => {
     setPick(null);
     setBusy('plan');
@@ -96,15 +86,23 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
       }
       const id = await putBlob(src instanceof File ? await shrink(src, 2000) : src);
       const r = await getRaster(id);
-      // room names: straight from the PDF's text layer, otherwise read off the picture
-      const labels = !r
+      // room names: straight from the PDF's text layer, otherwise read off the picture — first the
+      // whole sheet, then each room on its own once the walls are known
+      const sheet = !r
         ? []
         : pdfLabels
           ? pdfLabels.map((l) => ({ ...l, x: l.x * r.scale, y: l.y * r.scale }))
-          : await readLabels(viewId || id, r, ocrCopy);
+          : await readPlanLabels(ocrCopy?.blob || viewId || id, r, (k) => setProgress(`קורא את שמות החדרים בתוכנית ${Math.round(k * 100)}%`), ocrCopy?.scale);
       const plan = r
-        ? await autoTunePlan(r, p.details.sqm, p.details.rooms, (k) => setProgress(`קורא את התוכנית · בודק הגדרות קריאה ${Math.round(k * 100)}%`), labels)
+        ? await autoTunePlan(r, p.details.sqm, p.details.rooms, (k) => setProgress(`קורא את התוכנית · בודק הגדרות קריאה ${Math.round(k * 100)}%`), sheet)
         : null;
+      if (r && plan && !pdfLabels) {
+        const labels = await readLabelsByRoom(ocrCopy?.blob || viewId || id, r, plan, sheet, (k) => setProgress(`קורא את שם כל חדר ${Math.round(k * 100)}%`), ocrCopy?.scale);
+        if (labels.length > sheet.length) {
+          plan.labels = labels;
+          plan.rooms = autoRooms(analyzePlan(r, plan), p.details.rooms, labels);
+        }
+      }
       setProgress('');
       if (p.planBlobId) deleteBlob(p.planBlobId);
       if (p.planViewBlobId) deleteBlob(p.planViewBlobId);

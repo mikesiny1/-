@@ -33,6 +33,79 @@ const lum = (style: unknown) => {
  * transform at the moment it was set.
  * 'measure' tallies dark strokes by true width; 'filter' only lets through strokes of the cut pen.
  */
+/**
+ * Keeps only what looks like lettering: small filled shapes (outlined glyphs) and letter-sized strokes.
+ * Longer strokes — furniture, hatching, dimension lines — and large fills (walls) are dropped, so OCR
+ * sees clean text.
+ * @param minSide largest allowed short side of a shape, device px
+ * @param maxSide largest allowed long side
+ * @param letter largest stroked shape kept, device px (one letter of a CAD font)
+ */
+function lettersOnly(g: CanvasRenderingContext2D, minSide: number, maxSide: number, letter: number) {
+  const x = g as unknown as Record<string, (...a: number[]) => void>;
+  const proto = CanvasRenderingContext2D.prototype as unknown as Record<string, (...a: unknown[]) => void>;
+  let x0 = Infinity,
+    y0 = Infinity,
+    x1 = -Infinity,
+    y1 = -Infinity;
+  let pts = 0;
+  const add = (px: number, py: number) => {
+    pts++;
+    const m = g.getTransform();
+    const dx = m.a * px + m.c * py + m.e,
+      dy = m.b * px + m.d * py + m.f;
+    if (dx < x0) x0 = dx;
+    if (dx > x1) x1 = dx;
+    if (dy < y0) y0 = dy;
+    if (dy > y1) y1 = dy;
+  };
+  const wrap = (name: string, pts: (a: number[]) => void) => {
+    const native = proto[name];
+    x[name] = function (...a: number[]) {
+      pts(a);
+      return native.apply(g, a);
+    };
+  };
+  wrap('beginPath', () => ((x0 = y0 = Infinity), (x1 = y1 = -Infinity), (pts = 0)));
+  wrap('moveTo', (a) => add(a[0], a[1]));
+  wrap('lineTo', (a) => add(a[0], a[1]));
+  wrap('bezierCurveTo', (a) => (add(a[0], a[1]), add(a[2], a[3]), add(a[4], a[5])));
+  wrap('quadraticCurveTo', (a) => (add(a[0], a[1]), add(a[2], a[3])));
+  wrap('rect', (a) => (add(a[0], a[1]), add(a[0] + a[2], a[1] + a[3])));
+  // CAD fonts (SHX) draw each letter as a short polyline: a stroke the size of one letter stays
+  const nativeStroke = proto.stroke;
+  (g as unknown as { stroke: (...a: unknown[]) => void }).stroke = function (...a: unknown[]) {
+    if (a[0] instanceof Path2D) return;
+    const w = x1 - x0,
+      h = y1 - y0;
+    if (!(w >= 0 && h >= 0) || Math.max(w, h) > letter) return;
+    // wall hatching: lone diagonal dashes
+    if (pts === 2 && w > letter * 0.15 && h > letter * 0.15 && Math.abs(Math.log(w / h)) < 0.6) return;
+    if (lum(g.strokeStyle) > 200) return;
+    g.strokeStyle = '#000';
+    // CAD lettering is hairline: give it a solid pen so OCR sees black letters, not grey
+    const m = g.getTransform();
+    const sc = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
+    const prev = g.lineWidth;
+    g.lineWidth = Math.max(prev, (letter * 0.05) / sc);
+    nativeStroke.apply(g, a);
+    g.lineWidth = prev;
+  };
+  x.strokeRect = () => {};
+  x.fillRect = () => {};
+  x.drawImage = () => {};
+  const nativeFill = proto.fill;
+  (g as unknown as { fill: (...a: unknown[]) => void }).fill = function (...a: unknown[]) {
+    if (a[0] instanceof Path2D) return;
+    const w = x1 - x0,
+      h = y1 - y0;
+    if (!(w > 0 && h > 0) || Math.min(w, h) > minSide || Math.max(w, h) > maxSide) return;
+    if (lum(g.fillStyle) > 200) return;
+    g.fillStyle = '#000';
+    nativeFill.apply(g, a);
+  };
+}
+
 function watchPens(g: CanvasRenderingContext2D, mode: 'measure' | 'filter', cut = 0) {
   const proto = CanvasRenderingContext2D.prototype;
   const desc = Object.getOwnPropertyDescriptor(proto, 'lineWidth')!;
@@ -403,6 +476,9 @@ export async function pdfToPlan(file: Blob, maxSide = 2400, pageNo = 1): Promise
       if (s2 > s1 * 1.3) {
         const vp2 = page.getViewport({ scale: s2, offsetX: (-box.x0 / s0) * s2, offsetY: (-box.y0 / s0) * s2 });
         const hi = sized(vp2, s2);
+        // a word is a few percent of the drawing long and well under one percent high
+        const side = Math.max(hi.c.width, hi.c.height);
+        lettersOnly(hi.g, side * 0.012, side * 0.12, side * 0.012);
         await page.render({ canvasContext: hi.g, viewport: vp2 }).promise;
         ocr = { blob: await toBlob(hi.c), scale: s1 / s2 };
         hi.c.width = hi.c.height = 0;

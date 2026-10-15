@@ -122,6 +122,37 @@ export async function readPlanLabels(
   }
 }
 
+/**
+ * Room names read room by room, once the rooms are known (see readRoomCrops). Returns the names
+ * found, in working pixels, merged with those already known.
+ * @param scale image pixels per pixel of this blob
+ */
+export async function readLabelsByRoom(
+  blobId: string | Blob,
+  r: Raster,
+  s: PlanSettings,
+  known: NonNullable<PlanSettings['labels']>,
+  onProgress?: (k: number) => void,
+  scale = 1,
+): Promise<NonNullable<PlanSettings['labels']>> {
+  try {
+    const img = typeof blobId === 'string' ? await loadImage(blobId) : await blobImage(blobId);
+    if (!img) return known;
+    const m = analyzePlan(r, s);
+    const pad = s.pxPerM * 0.25;
+    const k = 1 / (r.scale * scale); // working px → this image's px
+    const rects = [...m.regions.values()]
+      .filter((g) => g.areaM2 >= 1.6 && g.areaM2 < 80)
+      .map((g) => ({ x0: (g.bbox.x0 - pad) * k, y0: (g.bbox.y0 - pad) * k, x1: (g.bbox.x1 + pad) * k, y1: (g.bbox.y1 + pad) * k }));
+    const { readRoomCrops } = await import('./ocr');
+    const found = await readRoomCrops(img, rects, r.scale * scale, onProgress, scale < 1 ? 1 : 4);
+    const near = s.pxPerM * 0.5;
+    return [...known, ...found.filter((l) => !known.some((o) => o.type === l.type && Math.hypot(o.x - l.x, o.y - l.y) < near))];
+  } catch {
+    return known;
+  }
+}
+
 export async function autoTunePlan(
   r: Raster,
   sqm: number,
