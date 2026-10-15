@@ -12,6 +12,11 @@ export interface PdfPlan {
   hasText: boolean;
   /** the analysed copy keeps only the heaviest pen (the cut walls of a working drawing) */
   cutPen: boolean;
+  /**
+   * names drawn as shapes, not text, are read by OCR: a sharper copy of the page for it, and the
+   * size of its pixels in image pixels
+   */
+  ocr?: { blob: Blob; scale: number };
 }
 
 const lum = (style: unknown) => {
@@ -201,17 +206,71 @@ function drawingBox(c: HTMLCanvasElement) {
 const toBlob = (c: HTMLCanvasElement) => new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
 
 /**
- * Renders the first page of a PDF plan (pdf.js is loaded only when needed). Architects' PDFs keep
+ * Renders one page of a PDF plan (pdf.js is loaded only when needed). Architects' PDFs keep
  * text as text: it is read directly for room names, and left out of the copy the reader analyses,
  * so dimensions, titles and labels can never be mistaken for walls.
  */
-export async function pdfToPlan(file: Blob, maxSide = 2400): Promise<PdfPlan> {
+async function openPdf(file: Blob) {
   const pdfjs = await import('pdfjs-dist');
   const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  return { doc, pdfjs };
+}
+
+export interface PdfPage {
+  /** 1-based page number */
+  n: number;
+  thumb: string;
+  /** the most prominent short text on the page — usually the apartment or type name */
+  title: string;
+}
+
+/**
+ * A sales brochure holds one apartment per page: small previews so the right one can be chosen.
+ * Returns an empty list for a single-page file.
+ */
+export async function pdfPages(file: Blob, side = 260): Promise<PdfPage[]> {
+  const { doc } = await openPdf(file);
   try {
-    const page = await doc.getPage(1);
+    if (doc.numPages < 2) return [];
+    const out: PdfPage[] = [];
+    for (let n = 1; n <= Math.min(doc.numPages, 60); n++) {
+      const page = await doc.getPage(n);
+      const b = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: side / Math.max(b.width, b.height) });
+      const c = document.createElement('canvas');
+      c.width = Math.round(vp.width);
+      c.height = Math.round(vp.height);
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#fff';
+      g.fillRect(0, 0, c.width, c.height);
+      await page.render({ canvasContext: g, viewport: vp }).promise;
+      let title = '';
+      let big = 0;
+      const tc = await page.getTextContent();
+      for (const it of tc.items as { str?: string; transform?: number[] }[]) {
+        const t = (it.str || '').trim();
+        if (!t || t.length > 14 || !it.transform) continue;
+        const size = Math.hypot(it.transform[0], it.transform[1]);
+        if (size > big) {
+          big = size;
+          title = t;
+        }
+      }
+      out.push({ n, thumb: c.toDataURL('image/jpeg', 0.8), title });
+      page.cleanup();
+    }
+    return out;
+  } finally {
+    doc.destroy();
+  }
+}
+
+export async function pdfToPlan(file: Blob, maxSide = 2400, pageNo = 1): Promise<PdfPlan> {
+  const { doc, pdfjs } = await openPdf(file);
+  try {
+    const page = await doc.getPage(Math.min(Math.max(1, pageNo), doc.numPages));
     const base = page.getViewport({ scale: 1 });
     type VP = ReturnType<typeof page.getViewport>;
     const canvas = (vp: VP) => {
@@ -244,17 +303,30 @@ export async function pdfToPlan(file: Blob, maxSide = 2400): Promise<PdfPlan> {
     if (cutPdf) watchPens(struct0.g, 'filter', cutPdf * s0);
     await page.render({ canvasContext: struct0.g, viewport: vp0 }).promise;
     // the drawing on the sheet: frame, title column and site map left out
-    const box = drawingBox(struct0.c);
+    let box = drawingBox(struct0.c);
+    if (cutPdf) {
+      // parts drawn with a lighter pen — a glass facade, a balcony rail — still belong to the
+      // apartment: take the whole drawing around the cut walls
+      const lines = canvas(vp0);
+      silence(lines.g, true);
+      await page.render({ canvasContext: lines.g, viewport: vp0 }).promise;
+      const all = drawingBox(lines.c);
+      const area = (b: typeof box) => (b.x1 - b.x0) * (b.y1 - b.y0);
+      const t = (box.x1 - box.x0 + box.y1 - box.y0) * 0.05;
+      const holds = all.x0 <= box.x0 + t && all.y0 <= box.y0 + t && all.x1 >= box.x1 - t && all.y1 >= box.y1 - t;
+      if (holds && area(all) < area(box) * 3)
+        box = { x0: Math.min(box.x0, all.x0), y0: Math.min(box.y0, all.y0), x1: Math.max(box.x1, all.x1), y1: Math.max(box.y1, all.y1) };
+    }
 
     // 2. that area, rendered at full resolution
     const cw = (box.x1 - box.x0) / s0,
       ch = (box.y1 - box.y0) / s0;
     const s1 = Math.min(maxSide / Math.max(cw, ch), 8);
     const vp = page.getViewport({ scale: s1, offsetX: (-box.x0 / s0) * s1, offsetY: (-box.y0 / s0) * s1 });
-    const sized = (vp_: VP) => {
+    const sized = (vp_: VP, sc = s1) => {
       const o = canvas(vp_);
-      o.c.width = Math.round(cw * s1);
-      o.c.height = Math.round(ch * s1);
+      o.c.width = Math.round(cw * sc);
+      o.c.height = Math.round(ch * sc);
       o.g.fillStyle = '#fff';
       o.g.fillRect(0, 0, o.c.width, o.c.height);
       return o;
@@ -324,7 +396,20 @@ export async function pdfToPlan(file: Blob, maxSide = 2400): Promise<PdfPlan> {
       const type = typeOfWord(wd.text);
       if (type && !labels.some((l) => l.type === type && Math.hypot(l.x - wd.x, l.y - wd.y) < 20)) labels.push({ type, text: wd.text, x: wd.x, y: wd.y });
     }
+    let ocr: PdfPlan['ocr'];
+    if (!labels.length) {
+      // vector lettering stays sharp at any size: twice the detail for the small room names
+      const s2 = Math.min(5000 / Math.max(cw, ch), 16);
+      if (s2 > s1 * 1.3) {
+        const vp2 = page.getViewport({ scale: s2, offsetX: (-box.x0 / s0) * s2, offsetY: (-box.y0 / s0) * s2 });
+        const hi = sized(vp2, s2);
+        await page.render({ canvasContext: hi.g, viewport: vp2 }).promise;
+        ocr = { blob: await toBlob(hi.c), scale: s1 / s2 };
+        hi.c.width = hi.c.height = 0;
+      }
+    }
     return {
+      ocr,
       clean: await toBlob(structure || clean.c),
       full: await toBlob(full.c),
       labels,

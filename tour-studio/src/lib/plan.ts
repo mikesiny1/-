@@ -1471,11 +1471,15 @@ export function autoRooms(m: PlanModel, declaredRooms: number, hints: PlanSettin
     .filter((v) => v > 0)
     .sort((a, b) => a - b);
   const medianExt = exts.length ? exts[Math.floor(exts.length / 2)] : 0;
+  // balconies open through glass; a room behind an ordinary door is indoors
+  const doored = (r: RoomRegion) =>
+    m.openings.some((o) => (o.la === r.label || o.lb === r.label) && o.la > 0 && o.lb > 0 && !o.glazed && !o.facade && o.widthM < 1.2);
+  const balconyLike = (r: RoomRegion) => r.touchesOutside && !doored(r);
   for (const r of regs) {
     if (used.has(r.label)) continue;
     // a very small closed room is a bathroom even on an outside wall; balconies are bigger
     if (r.areaM2 < 4.6 && !narrow(r)) push(r, 'bathroom', '');
-    else if (r.touchesOutside && r.extWall > 0 && r.extWall < medianExt * 0.8) push(r, 'balcony', '');
+    else if (balconyLike(r) && r.extWall > 0 && r.extWall < medianExt * 0.8) push(r, 'balcony', '');
     else if (narrow(r)) push(r, 'hall', '');
     else if (r.areaM2 < 5.2) push(r, 'bathroom', '');
   }
@@ -1496,7 +1500,22 @@ export function autoRooms(m: PlanModel, declaredRooms: number, hints: PlanSettin
       push(r, bedrooms === 0 && !hasMaster ? 'master' : 'bedroom', '');
       bedrooms++;
     } else if (!out.some((o) => o.type === 'kitchen') && !textTypes.has('kitchen')) push(r, 'kitchen', '');
-    else push(r, r.touchesOutside ? 'balcony' : 'office', '');
+    // what is left over and small is a bathroom or utility room; a study needs a desk and a chair
+    else push(r, r.areaM2 < 6.5 ? 'bathroom' : balconyLike(r) ? 'balcony' : 'office', '');
+  }
+  // every new apartment has a safe room: a "bedroom" with clearly thicker walls is it ("ח. שינה / ממ״ד"
+  // where only the first word was read)
+  if (!out.some((o) => o.type === 'mamad') && m.medianWall > 0) {
+    const regOf = (o: PlanRoom) => m.regions.get(+o.id.slice(1).split('_')[0]);
+    const cand = out
+      .filter((o) => o.type === 'bedroom' || o.type === 'office')
+      .map((o) => ({ o, r: regOf(o) }))
+      .filter((c) => c.r && c.r.wallThickness >= m.medianWall * 1.5 && c.r.areaM2 > 6 && c.r.areaM2 < 16)
+      .sort((a, b) => b.r!.wallThickness - a.r!.wallThickness)[0];
+    if (cand) {
+      cand.o.type = 'mamad';
+      cand.o.name = 'ממ״ד';
+    }
   }
   return out;
 }

@@ -56,11 +56,16 @@ function rotated(src: HTMLCanvasElement, k: 0 | 1 | 3) {
  * @param img the full-resolution plan
  * @param workScale working-image pixels per image pixel (Raster.scale)
  */
-export async function readRoomLabels(img: HTMLImageElement | HTMLCanvasElement, workScale: number, onProgress?: (k: number) => void): Promise<TextHint[]> {
+export async function readRoomLabels(
+  img: HTMLImageElement | HTMLCanvasElement,
+  workScale: number,
+  onProgress?: (k: number) => void,
+  maxSide = 3000,
+): Promise<TextHint[]> {
   const iw = img instanceof HTMLImageElement ? img.naturalWidth : img.width;
   const ih = img instanceof HTMLImageElement ? img.naturalHeight : img.height;
   // text needs resolution: CAD lettering is small, so ~3000 px on the long side
-  const k = Math.min(2.5, 3000 / Math.max(iw, ih));
+  const k = Math.min(2.5, maxSide / Math.max(iw, ih));
   const base = document.createElement('canvas');
   base.width = Math.round(iw * k);
   base.height = Math.round(ih * k);

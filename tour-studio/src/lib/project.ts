@@ -93,12 +93,30 @@ export function scorePlan(m: PlanModel, sqm: number, declaredRooms: number) {
  * gives the most plausible apartment (room count, total area, wall density, openings).
  */
 /** Room names printed on the plan, read by OCR on this device; empty when OCR is unavailable. */
-export async function readPlanLabels(blobId: string, r: Raster, onProgress?: (k: number) => void): Promise<NonNullable<PlanSettings['labels']>> {
+async function blobImage(b: Blob) {
+  const bmp = await createImageBitmap(b);
+  const c = document.createElement('canvas');
+  c.width = bmp.width;
+  c.height = bmp.height;
+  c.getContext('2d')!.drawImage(bmp, 0, 0);
+  bmp.close();
+  return c;
+}
+
+/**
+ * @param scale image pixels per pixel of this blob (a sharper copy made for reading is larger)
+ */
+export async function readPlanLabels(
+  blobId: string | Blob,
+  r: Raster,
+  onProgress?: (k: number) => void,
+  scale = 1,
+): Promise<NonNullable<PlanSettings['labels']>> {
   try {
-    const img = await loadImage(blobId);
+    const img = typeof blobId === 'string' ? await loadImage(blobId) : await blobImage(blobId);
     if (!img) return [];
     const { readRoomLabels } = await import('./ocr');
-    return await readRoomLabels(img, r.scale, onProgress);
+    return await readRoomLabels(img, r.scale * scale, onProgress, scale < 1 ? 5000 : 3000);
   } catch {
     return [];
   }
