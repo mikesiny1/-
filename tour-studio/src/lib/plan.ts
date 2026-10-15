@@ -6,7 +6,7 @@
  * a morphological opening, and what is left is treated as walls. Rooms are the
  * connected free areas once doorways are temporarily closed.
  */
-import type { PlanRoom, PlanSettings, RoomType } from './types';
+import type { PlanEdit, PlanRoom, PlanSettings, RoomType } from './types';
 
 export const WORK_MAX = 1000;
 
@@ -52,6 +52,8 @@ export interface Opening {
   outA: boolean;
   outB: boolean;
   glazed: boolean;
+  /** set by a hand correction: build exactly this */
+  force?: OpeningKind;
 }
 
 export interface PlanModel {
@@ -420,6 +422,8 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
   const pxPerM = s.pxPerM;
   const wall = extractWalls(r, s.threshold, s.minWall, s.fillOutline ? Math.round(s.fillOutline * pxPerM) : 0);
   if (!s.fillOutline) addPartitions(r, wall, Math.min(200, s.threshold + 40), pxPerM, glazingMask(r, wall, pxPerM, 2.2, true));
+  // the user's corrections have the last word on what is wall
+  if (s.edits?.length) applyEdits(wall, s.edits, w, h);
 
   // Interior: everything enclosed by the outer walls once window/door gaps up to ~2.6m are bridged.
   // Thin facade lines (glazing drawn in light grey) count too, but only close to the building, so
@@ -568,6 +572,7 @@ export function analyzePlan(r: Raster, s: PlanSettings): PlanModel {
 
   const openings = detectOpenings(wall, interior, labels, sep || separators(r, Math.min(215, s.threshold + 60)), pxPerM, w, h);
   openings.push(...facadeGlazing(wall, interior, labels, openings, separators(r, 228), pxPerM, w, h));
+  if (s.edits?.length) forceOpenings(openings, s.edits, interior, labels, pxPerM, w, h);
 
   return {
     w,
@@ -686,6 +691,7 @@ function detectOpenings(wall: Uint8Array, interior: Uint8Array, labels: Int32Arr
 }
 
 export function classifyOpening(o: Opening, isBalcony: (label: number) => boolean): OpeningKind {
+  if (o.force) return o.force;
   if (o.facade) return 'facade';
   const exterior = o.outA || o.outB;
   const toBalcony = isBalcony(o.la) !== isBalcony(o.lb);
@@ -703,6 +709,81 @@ interface Seg {
   a1: number;
   c0: number;
   c1: number;
+}
+
+// ---------------------------------------------------------------- hand corrections
+
+/** Distance from (px, py) to the segment of an edit, and the position along it (0..1). */
+function segDist(e: PlanEdit, px: number, py: number) {
+  const dx = e.x1 - e.x0,
+    dy = e.y1 - e.y0;
+  const L2 = dx * dx + dy * dy || 1;
+  const u = Math.max(0, Math.min(1, ((px - e.x0) * dx + (py - e.y0) * dy) / L2));
+  return { d: Math.hypot(px - (e.x0 + dx * u), py - (e.y0 + dy * u)), u };
+}
+
+function applyEdits(wall: Uint8Array, edits: PlanEdit[], w: number, h: number) {
+  for (const e of edits) {
+    const r = e.t / 2;
+    const x0 = Math.max(0, Math.floor(Math.min(e.x0, e.x1) - r - 1)),
+      x1 = Math.min(w - 1, Math.ceil(Math.max(e.x0, e.x1) + r + 1));
+    const y0 = Math.max(0, Math.floor(Math.min(e.y0, e.y1) - r - 1)),
+      y1 = Math.min(h - 1, Math.ceil(Math.max(e.y0, e.y1) + r + 1));
+    const v = e.k === 'wall' ? 1 : 0;
+    // walls get square ends (they meet other walls cleanly); cuts are exact rectangles too
+    for (let y = y0; y <= y1; y++)
+      for (let x = x0; x <= x1; x++) {
+        const { d, u } = segDist(e, x + 0.5, y + 0.5);
+        if (d <= r && u > 0 && u < 1) wall[y * w + x] = v;
+        else if (e.k === 'wall' && d <= r) wall[y * w + x] = 1;
+      }
+  }
+}
+
+/** Doors and windows the user cut: make sure each is an opening, of the kind they chose. */
+function forceOpenings(openings: Opening[], edits: PlanEdit[], interior: Uint8Array, labels: Int32Array, ppm: number, w: number, h: number) {
+  for (const e of edits) {
+    if (e.k !== 'door' && e.k !== 'window') continue;
+    const kind: OpeningKind = e.k === 'door' ? 'door' : 'window';
+    const hit = openings.filter((o) => segDist(e, (o.x0 + o.x1) / 2, (o.y0 + o.y1) / 2).d < e.t);
+    if (hit.length) {
+      for (const o of hit) {
+        // a door onto the outside is the entrance; a wide window to a balcony is a slider
+        o.force = kind === 'door' && (o.outA || o.outB) ? 'entry' : kind === 'window' && o.widthM >= 2.2 ? 'slider' : kind;
+        o.glazed = kind === 'window';
+      }
+      continue;
+    }
+    // no paired wall ends around the cut (e.g. at a corner): build the opening from the cut itself
+    const axis: 'x' | 'y' = Math.abs(e.x1 - e.x0) >= Math.abs(e.y1 - e.y0) ? 'x' : 'y';
+    const half = Math.max(2, ppm * 0.12);
+    const a0 = axis === 'x' ? Math.min(e.x0, e.x1) : Math.min(e.y0, e.y1),
+      a1 = axis === 'x' ? Math.max(e.x0, e.x1) : Math.max(e.y0, e.y1);
+    const c = axis === 'x' ? (e.y0 + e.y1) / 2 : (e.x0 + e.x1) / 2;
+    const probe = (k: number) => {
+      const reach = half + ppm * 0.35;
+      const x = Math.round(axis === 'x' ? (a0 + a1) / 2 : c + k * reach),
+        y = Math.round(axis === 'x' ? c + k * reach : (a0 + a1) / 2);
+      if (x < 0 || y < 0 || x >= w || y >= h) return { l: 0, inside: false };
+      return { l: labels[y * w + x], inside: !!interior[y * w + x] };
+    };
+    const pa = probe(-1),
+      pb = probe(1);
+    openings.push({
+      x0: axis === 'x' ? a0 : c - half,
+      x1: axis === 'x' ? a1 : c + half,
+      y0: axis === 'x' ? c - half : a0,
+      y1: axis === 'x' ? c + half : a1,
+      axis,
+      widthM: (a1 - a0) / ppm,
+      la: pa.l,
+      lb: pb.l,
+      outA: !pa.inside,
+      outB: !pb.inside,
+      glazed: kind === 'window',
+      force: kind === 'door' && (!pa.inside || !pb.inside) ? 'entry' : kind,
+    });
+  }
 }
 
 /** Straight axis-aligned strokes in an ink mask (each with its extent along and across). */

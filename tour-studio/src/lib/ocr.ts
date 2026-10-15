@@ -5,6 +5,7 @@
  */
 import { createWorker, PSM } from 'tesseract.js';
 import type { RoomType } from './types';
+import { typeOfWord } from './roomwords';
 
 export interface TextHint {
   type: RoomType;
@@ -15,28 +16,6 @@ export interface TextHint {
 }
 
 const media = (p: string) => new URL('media/ocr/' + p, document.baseURI).toString();
-
-// word stems → room type; the first match wins, so the specific ones come first
-const WORDS: [RegExp, RoomType][] = [
-  [/הורים/, 'master'],
-  [/ילדים/, 'kids'],
-  [/שינה/, 'bedroom'],
-  [/ממד|מ\.מ\.ד|מרחב מוגן/, 'mamad'],
-  [/מטבח|מטבחון/, 'kitchen'],
-  [/מרפס|גזוזטר|מרפ"ש/, 'balcony'],
-  [/סלון|מגורים|אוכל|טרקלין/, 'living'],
-  [/רחצה|אמבט|מקלחת|שירות|שרות|אורחים|ש\.א/, 'bathroom'],
-  [/עבודה|ספריה|משרד/, 'office'],
-  [/מבוא|מסדרון|פרוזדור|כניסה|לובי/, 'hall'],
-  [/מחסן|כביסה|ארונות|מזווה/, 'storage'],
-];
-
-export function typeOfWord(raw: string): RoomType | null {
-  const w = raw.replace(/[֑-ׇ'"״׳`]/g, '').trim();
-  if (w.length < 2) return null;
-  for (const [re, t] of WORDS) if (re.test(w) || re.test([...w].reverse().join(''))) return t;
-  return null;
-}
 
 let primed: Promise<void> | null = null;
 function primeModelCache() {

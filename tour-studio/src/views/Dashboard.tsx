@@ -17,7 +17,7 @@ export const STATUS_NAME: Record<ProjectStatus, string> = {
 function Thumb({ p }: { p: Project }) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
-    blobUrl(p.coverBlobId || p.photos[0]?.blobId || p.planBlobId).then(setSrc);
+    blobUrl(p.coverBlobId || p.photos[0]?.blobId || p.planViewBlobId || p.planBlobId).then(setSrc);
   }, [p]);
   return <div className="thumb">{src ? <img src={src} alt="" /> : <Icon name="image" size={22} />}</div>;
 }

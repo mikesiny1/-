@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon, Range, useToast } from '../../components/ui';
 import { loadImage, uid } from '../../lib/db';
-import { autoRooms, classifyOpening, regionAt, roomRectAt, type OpeningKind, type PlanModel, type Raster } from '../../lib/plan';
+import { analyzePlan, autoRooms, classifyOpening, regionAt, roomRectAt, type OpeningKind, type PlanModel, type Raster } from '../../lib/plan';
 import { autoTunePlan, getRaster, modelFor, readPlanLabels } from '../../lib/project';
 import { ROOM_TYPES, roomName } from '../../lib/styles';
-import type { PlanRoom, PlanSettings, RoomType } from '../../lib/types';
+import type { PlanEdit, PlanRoom, PlanSettings, RoomType } from '../../lib/types';
 import type { StepProps } from '../ProjectView';
 import { Viewer3D } from './TourStep';
 
@@ -20,7 +20,10 @@ const OPENING_NAMES: Record<OpeningKind, string> = { door: 'דלת', passage: '�
 
 const ROOM_COLORS = ['#c9a36b', '#7f9a7a', '#8aa0b8', '#b88a8a', '#a59ac2', '#c2b37a', '#7fb0ad', '#b9927a', '#9aa37f', '#c7a0b8'];
 
-type Mode = 'view' | 'add' | 'calibrate';
+type Mode = 'view' | 'add' | 'calibrate' | 'wall' | 'erase' | 'door' | 'window';
+const EDIT_MODES: Mode[] = ['wall', 'erase', 'door', 'window'];
+const EDIT_COLORS: Record<PlanEdit['k'], string> = { wall: '#6b5426', erase: '#b3412e', door: '#2f7d4f', window: '#2c62b8' };
+const WALL_CM = [10, 20, 25, 30];
 
 export default function PlanStep({ p, update, next }: StepProps) {
   const [raster, setRaster] = useState<Raster | null>(null);
@@ -31,6 +34,7 @@ export default function PlanStep({ p, update, next }: StepProps) {
   const [cal, setCal] = useState<{ a?: [number, number]; b?: [number, number] }>({});
   const [calLen, setCalLen] = useState('');
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const [wallCm, setWallCm] = useState(20);
   const canvas = useRef<HTMLCanvasElement>(null);
   const toast = useToast();
   const [zoom, setZoom] = useState(1);
@@ -42,11 +46,12 @@ export default function PlanStep({ p, update, next }: StepProps) {
   useEffect(() => {
     if (!p.planBlobId) return;
     getRaster(p.planBlobId).then(setRaster);
-    loadImage(p.planBlobId).then(setImg);
-  }, [p.planBlobId]);
+    // what people see is the plan as printed; the reader may be working on a cleaned copy
+    loadImage(p.planViewBlobId || p.planBlobId).then(setImg);
+  }, [p.planBlobId, p.planViewBlobId]);
 
   // analysis (debounced)
-  const analysisKey = s ? JSON.stringify([s.threshold, s.minWall, s.doorGap, s.pxPerM, s.rooms.map((r) => r.rect || 0)]) : '';
+  const analysisKey = s ? JSON.stringify([s.threshold, s.minWall, s.doorGap, s.pxPerM, s.rooms.map((r) => r.rect || 0), s.edits || []]) : '';
   useEffect(() => {
     if (!raster || !s || !p.planBlobId) return;
     const t = setTimeout(() => setModel(modelFor(p.planBlobId!, raster, s)), 120);
@@ -78,8 +83,13 @@ export default function PlanStep({ p, update, next }: StepProps) {
     if (!raster) return;
     setTuning(0);
     // room names printed on the plan: read once, then kept with the plan
-    const labels = p.plan?.labels?.length ? p.plan.labels : p.planBlobId ? await readPlanLabels(p.planBlobId, raster) : [];
+    const labels = p.plan?.labels?.length ? p.plan.labels : p.planBlobId ? await readPlanLabels(p.planViewBlobId || p.planBlobId, raster) : [];
     const next = await autoTunePlan(raster, p.details.sqm, p.details.rooms, setTuning, labels);
+    // hand corrections survive a re-read
+    if (p.plan?.edits?.length) {
+      next.edits = p.plan.edits;
+      next.rooms = autoRooms(analyzePlan(raster, next), p.details.rooms, next.labels);
+    }
     setTuning(null);
     setPlan(() => next);
     toast(`הקריאה עודכנה · ${next.rooms.length} חללים`);
@@ -185,8 +195,44 @@ export default function PlanStep({ p, update, next }: StepProps) {
     setMode('view');
   };
 
+  /** a drag snapped to horizontal / vertical when it is nearly so, as walls almost always are */
+  const snapped = (d: { x0: number; y0: number; x1: number; y1: number }) => {
+    const dx = Math.abs(d.x1 - d.x0),
+      dy = Math.abs(d.y1 - d.y0);
+    if (dx > dy * 2.5) return { ...d, y1: d.y0 };
+    if (dy > dx * 2.5) return { ...d, x1: d.x0 };
+    return d;
+  };
+  const editFrom = (d: { x0: number; y0: number; x1: number; y1: number }): PlanEdit | null => {
+    if (!model) return null;
+    const ppm = model.pxPerM;
+    if (mode === 'erase') {
+      // a dragged box: cut along its long side, as wide as its short side
+      const x0 = Math.min(d.x0, d.x1),
+        x1 = Math.max(d.x0, d.x1),
+        y0 = Math.min(d.y0, d.y1),
+        y1 = Math.max(d.y0, d.y1);
+      if (x1 - x0 < 3 && y1 - y0 < 3) return null;
+      return x1 - x0 >= y1 - y0
+        ? { k: 'erase', x0, y0: (y0 + y1) / 2, x1, y1: (y0 + y1) / 2, t: Math.max(6, y1 - y0) }
+        : { k: 'erase', x0: (x0 + x1) / 2, y0, x1: (x0 + x1) / 2, y1, t: Math.max(6, x1 - x0) };
+    }
+    const sd = snapped(d);
+    if (Math.hypot(sd.x1 - sd.x0, sd.y1 - sd.y0) < ppm * 0.25) return null;
+    if (mode === 'wall') return { k: 'wall', ...sd, t: Math.max(2, (wallCm / 100) * ppm) };
+    // doors and windows cut clean through any wall they are drawn along
+    return { k: mode as 'door' | 'window', ...sd, t: Math.max(ppm * 0.5, (model.medianWall || ppm * 0.2) * 2.4) };
+  };
+
   const onDown = (e: React.PointerEvent) => {
-    if (mode !== 'add' || !model) return;
+    if (!model) return;
+    if (EDIT_MODES.includes(mode)) {
+      const [x, y] = toRaster(e);
+      setDrag({ x0: x, y0: y, x1: x, y1: y });
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
+    if (mode !== 'add') return;
     const [x, y] = toRaster(e);
     setDrag({ x0: x, y0: y, x1: x, y1: y });
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -200,6 +246,12 @@ export default function PlanStep({ p, update, next }: StepProps) {
   const onUp = (e: React.PointerEvent) => {
     if (!model || !raster) return;
     const [x, y] = toRaster(e);
+    if (EDIT_MODES.includes(mode) && drag) {
+      setDrag(null);
+      const ed = editFrom({ ...drag, x1: x, y1: y });
+      if (ed) setPlan((pl) => ({ ...pl, edits: [...(pl.edits || []), ed] }));
+      return;
+    }
     if (mode === 'add' && drag) {
       setDrag(null);
       const rect = { x0: Math.min(drag.x0, x), y0: Math.min(drag.y0, y), x1: Math.max(drag.x0, x), y1: Math.max(drag.y0, y) };
@@ -243,8 +295,8 @@ export default function PlanStep({ p, update, next }: StepProps) {
           <div className="eyebrow">שלב 4</div>
           <h1>קריאת התוכנית</h1>
           <p>
-            המערכת זיהתה את הקירות (בשחור) ואת החללים (בצבע). בדקו שכל חדר מסומן נכון — סוג החדר קובע איזה ריהוט יוצב בו. אם חדרים "נשפכים" זה לזה, הגדילו את רוחב
-            הפתחים.
+            המערכת קראה את הקירות (בשחור), את החדרים (בצבע) ואת הדלתות והחלונות. אם משהו לא תואם לתוכנית, מתקנים ישירות עליה: <b>קיר</b> מוסיף קיר שחסר, <b>מחיקה</b>{' '}
+            מסירה קיר שזוהה בטעות, <b>דלת / פתח</b> ו<b>חלון</b> פותחים פתח במקום הנכון. כל תיקון נשמר, מתעדכן מיד בחדרים ובתלת-ממד, ונשאר גם בקריאה מחדש.
           </p>
         </div>
       </div>
@@ -269,6 +321,29 @@ export default function PlanStep({ p, update, next }: StepProps) {
                 כיול קנה מידה
               </button>
             </div>
+            <div className="seg" role="group" aria-label="תיקון קירות">
+              <button className={mode === 'wall' ? 'on' : ''} onClick={() => setMode('wall')} title="גררו לאורך הקיר">
+                קיר
+              </button>
+              <button className={mode === 'erase' ? 'on' : ''} onClick={() => setMode('erase')} title="גררו מלבן על מה שאינו קיר">
+                מחיקה
+              </button>
+              <button className={mode === 'door' ? 'on' : ''} onClick={() => setMode('door')} title="גררו לאורך הקיר ברוחב הדלת">
+                דלת / פתח
+              </button>
+              <button className={mode === 'window' ? 'on' : ''} onClick={() => setMode('window')} title="גררו לאורך הקיר ברוחב החלון">
+                חלון
+              </button>
+            </div>
+            {mode === 'wall' && (
+              <div className="seg" title="עובי הקיר">
+                {WALL_CM.map((cm) => (
+                  <button key={cm} className={wallCm === cm ? 'on' : ''} onClick={() => setWallCm(cm)}>
+                    {cm} ס״מ
+                  </button>
+                ))}
+              </div>
+            )}
             {mode === 'add' && (
               <select className="select" style={{ width: 170, height: 34 }} value={addType} onChange={(e) => setAddType(e.target.value as RoomType)}>
                 {ROOM_TYPES.map((t) => (
@@ -289,8 +364,17 @@ export default function PlanStep({ p, update, next }: StepProps) {
             <button className="btn ghost sm" onClick={undo} title="ביטול פעולה (Ctrl+Z)">
               ביטול
             </button>
+            {!!s.edits?.length && (
+              <button className="btn quiet sm" onClick={() => setPlan((pl) => ({ ...pl, edits: [] }))} title="מחיקת כל התיקונים הידניים">
+                ניקוי {s.edits.length} תיקונים
+              </button>
+            )}
             <span className="small muted" style={{ flexBasis: '100%' }}>
               {mode === 'add' && 'לחצו בתוך החדר, או גררו מלבן על שטח החדר'}
+              {mode === 'wall' && 'גררו לאורך הקיר בתוכנית. קו כמעט ישר מתיישר מעצמו.'}
+              {mode === 'erase' && 'גררו מלבן על מה שזוהה כקיר בטעות (טקסט, רהיט, קו מידה)'}
+              {mode === 'door' && 'גררו לאורך הקיר, מצד לצד של הדלת או המעבר'}
+              {mode === 'window' && 'גררו לאורך הקיר החיצוני, מצד לצד של החלון'}
               {mode === 'calibrate' && !cal.b && 'לחצו על שתי נקודות שהמרחק ביניהן ידוע (למשל קו מידה)'}
             </span>
           </div>
@@ -313,7 +397,32 @@ export default function PlanStep({ p, update, next }: StepProps) {
             style={{ touchAction: mode === 'view' ? 'auto' : 'none', width: `${zoom * 100}%` }}
           >
             <canvas ref={canvas} />
-            {drag && raster && (
+            {raster && (s.edits?.length || (drag && EDIT_MODES.includes(mode))) ? (
+              <svg className="editlayer" viewBox={`0 0 ${raster.w} ${raster.h}`} preserveAspectRatio="none" aria-hidden="true">
+                {(s.edits || []).map((ed, i) => (
+                  <line
+                    key={i}
+                    x1={ed.x0}
+                    y1={ed.y0}
+                    x2={ed.x1}
+                    y2={ed.y1}
+                    stroke={EDIT_COLORS[ed.k]}
+                    strokeOpacity={ed.k === 'wall' ? 0.45 : 0.35}
+                    strokeWidth={ed.t}
+                    strokeLinecap={ed.k === 'wall' ? 'round' : 'butt'}
+                  />
+                ))}
+                {drag &&
+                  EDIT_MODES.includes(mode) &&
+                  (() => {
+                    const ed = editFrom(drag);
+                    return ed ? (
+                      <line x1={ed.x0} y1={ed.y0} x2={ed.x1} y2={ed.y1} stroke={EDIT_COLORS[ed.k]} strokeOpacity={0.75} strokeWidth={ed.t} strokeLinecap={ed.k === 'wall' ? 'round' : 'butt'} />
+                    ) : null;
+                  })()}
+              </svg>
+            ) : null}
+            {drag && mode === 'add' && raster && (
               <span
                 className="dragrect"
                 style={{

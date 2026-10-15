@@ -52,6 +52,17 @@ export interface PlanRoom {
   rect?: { x0: number; y0: number; x1: number; y1: number };
 }
 
+/** A correction drawn over the plan, in working-image pixels. Walls are added along the
+ *  segment with thickness t; the other kinds cut through whatever lies within t/2 of it. */
+export interface PlanEdit {
+  k: 'wall' | 'erase' | 'door' | 'window';
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  t: number;
+}
+
 export interface PlanSettings {
   /** working-image pixels per meter */
   pxPerM: number;
@@ -69,6 +80,8 @@ export interface PlanSettings {
   fillOutline?: number;
   /** where the scale came from */
   scaleSource?: 'doors' | 'area' | 'guess' | 'manual';
+  /** hand corrections, applied on top of the automatic reading, in order */
+  edits?: PlanEdit[];
   /** room names read off the plan (OCR), in working-image pixels */
   labels?: { type: RoomType; text: string; x: number; y: number }[];
 }
@@ -135,6 +148,8 @@ export interface Project {
   status: ProjectStatus;
   details: PropertyDetails;
   planBlobId: string | null;
+  /** the plan as printed, when the analysed copy differs (a PDF with its lettering removed) */
+  planViewBlobId?: string | null;
   plan: PlanSettings | null;
   photos: PhotoEntry[];
   design: DesignBrief;

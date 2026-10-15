@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Drop, Icon, useToast } from '../../components/ui';
 import { blobUrl, deleteBlob, putBlob, uid } from '../../lib/db';
 import { autoTunePlan, getRaster, readPlanLabels } from '../../lib/project';
-import { pdfToImage } from '../../lib/pdf';
+import { pdfToPlan } from '../../lib/pdf';
 import type { PhotoEntry, RoomType } from '../../lib/types';
 import type { StepProps } from '../ProjectView';
 
@@ -39,19 +39,33 @@ export default function MaterialsStep({ p, update, next }: StepProps) {
     setBusy('plan');
     try {
       let src: Blob = f;
+      let viewId: string | null = null;
+      let pdfLabels: { type: RoomType; text: string; x: number; y: number }[] | null = null;
       if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
-        setProgress('ממיר PDF לתמונה…');
-        src = await pdfToImage(f);
+        setProgress('קורא את קובץ ה-PDF…');
+        const pdf = await pdfToPlan(f);
+        // an architect's PDF: read the drawing without its lettering, show it as printed
+        if (pdf.hasText) {
+          src = pdf.clean;
+          viewId = await putBlob(pdf.full);
+          pdfLabels = pdf.labels;
+        } else src = pdf.full;
       }
       const id = await putBlob(src instanceof File ? await shrink(src, 2000) : src);
       const r = await getRaster(id);
-      const labels = r ? await readPlanLabels(id, r, (k) => setProgress(`קורא את שמות החדרים בתוכנית ${Math.round(k * 100)}%`)) : [];
+      // room names: straight from the PDF's text layer, otherwise read off the picture
+      const labels = !r
+        ? []
+        : pdfLabels
+          ? pdfLabels.map((l) => ({ ...l, x: l.x * r.scale, y: l.y * r.scale }))
+          : await readPlanLabels(id, r, (k) => setProgress(`קורא את שמות החדרים בתוכנית ${Math.round(k * 100)}%`));
       const plan = r
         ? await autoTunePlan(r, p.details.sqm, p.details.rooms, (k) => setProgress(`קורא את התוכנית · בודק הגדרות קריאה ${Math.round(k * 100)}%`), labels)
         : null;
       setProgress('');
       if (p.planBlobId) deleteBlob(p.planBlobId);
-      update((x) => ({ ...x, planBlobId: id, plan, status: x.status === 'draft' ? 'in_progress' : x.status }));
+      if (p.planViewBlobId) deleteBlob(p.planViewBlobId);
+      update((x) => ({ ...x, planBlobId: id, planViewBlobId: viewId, plan, status: x.status === 'draft' ? 'in_progress' : x.status }));
       toast(plan?.rooms.length ? `זוהו ${plan.rooms.length} חללים בתוכנית` : 'התוכנית נטענה — נעבור עליה בשלב הקריאה');
     } finally {
       setBusy('');
